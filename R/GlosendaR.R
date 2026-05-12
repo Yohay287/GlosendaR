@@ -172,7 +172,7 @@ glosendas_list_devices <- function(username, password, filter_word = "") {
   h <- httr::handle(.glosendas_env$BASE_URL)
 
   if (httr::status_code(httr::GET(.glosendas_env$LOGIN_URL,
-                                   httr::handle(h))) != 200)
+                                   handle = h)) != 200)
     stop("Cannot reach portal.")
 
   body <- paste0(
@@ -182,7 +182,7 @@ glosendas_list_devices <- function(username, password, filter_word = "") {
   )
   resp <- httr::POST(
     .glosendas_env$POST_URL, body = body, encode = "raw",
-    httr::handle(h),
+    handle = h,
     httr::add_headers(`Content-Type` = "application/x-www-form-urlencoded")
   )
 
@@ -257,7 +257,7 @@ glosendas_list_devices <- function(username, password, filter_word = "") {
 
   resp <- httr::POST(
     .glosendas_env$DEVICE_URL, body = body, encode = "raw",
-    httr::handle(h),
+    handle = h,
     httr::add_headers(
       `Content-Type`     = "application/x-www-form-urlencoded",
       `X-Requested-With` = "XMLHttpRequest",
@@ -292,7 +292,7 @@ glosendas_list_devices <- function(username, password, filter_word = "") {
 
   resp <- httr::POST(
     .glosendas_env$POST_URL, body = body, encode = "raw",
-    httr::handle(h),
+    handle = h,
     httr::add_headers(
       `Content-Type` = "application/x-www-form-urlencoded",
       Referer        = .glosendas_env$LOGIN_URL,
