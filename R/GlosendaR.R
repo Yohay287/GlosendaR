@@ -404,7 +404,7 @@ glosendas_list_devices <- function(username, password,
                                  tolower(gsub("[^a-zA-Z0-9]", "_",
                                               format_label)),
                                  "_", ts, ".csv"))
-    utils::write.csv(df, out_file, row.names = FALSE, na = "NA")
+    utils::write.csv(df, out_file, row.names = FALSE, na = "")
     if (verbose)
       message(sprintf("  Saved : %s (%.1f KB)",
                       out_file, file.size(out_file) / 1024))
@@ -531,7 +531,7 @@ glosendas_save <- function(df,
   }
 
   out_file <- file.path(output_dir, filename)
-  utils::write.csv(df, out_file, row.names = FALSE, na = "NA")
+  utils::write.csv(df, out_file, row.names = FALSE, na = "")
 
   fsize <- file.size(out_file)
   if (verbose)
