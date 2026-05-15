@@ -255,10 +255,12 @@ glosendas_list_devices <- function(username, password,
   peek <- rawToChar(raw[seq_len(min(200, length(raw)))])
   if (grepl("<!DOCTYPE|<html", peek, ignore.case = TRUE))
     return(list(status = "html_error", lines = NULL))
-  # Split on both \n and \r\n, strip ALL blank/whitespace-only lines.
-  # The portal emits one blank line after every data row in all formats.
+  # The portal uses \r\r\n as line endings (carriage return + carriage return + newline).
+  # We normalise to plain \n before splitting, which eliminates all blank lines.
   txt_raw <- rawToChar(raw)
-  txt_raw <- gsub("\r", "", txt_raw, fixed = TRUE)
+  txt_raw <- gsub("\r\r\n", "\n", txt_raw, fixed = TRUE)  # portal-specific: \r\r\n -> \n
+  txt_raw <- gsub("\r\n",   "\n", txt_raw, fixed = TRUE)  # standard Windows: \r\n -> \n
+  txt_raw <- gsub("\r",     "\n", txt_raw, fixed = TRUE)  # bare \r -> \n
   lines   <- strsplit(txt_raw, "\n", fixed = TRUE)[[1]]
   lines   <- lines[nzchar(trimws(lines))]
   if (length(lines) < 2) return(list(status = "empty_csv", lines = NULL))
@@ -391,6 +393,21 @@ glosendas_list_devices <- function(username, password,
       message(sprintf("  Dropped %d empty column(s): %s",
                       n_dropped, paste(names(df)[all_na], collapse = ", ")))
     df <- df[, !all_na, drop = FALSE]
+  }
+
+  # Save clean CSV (written from the R dataframe — no gap rows)
+  if (save_csv) {
+    dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+    ts       <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    out_file <- file.path(output_dir,
+                          paste0("glosendas_",
+                                 tolower(gsub("[^a-zA-Z0-9]", "_",
+                                              format_label)),
+                                 "_", ts, ".csv"))
+    utils::write.csv(df, out_file, row.names = FALSE, na = "NA")
+    if (verbose)
+      message(sprintf("  Saved : %s (%.1f KB)",
+                      out_file, file.size(out_file) / 1024))
   }
 
   if (verbose) {
