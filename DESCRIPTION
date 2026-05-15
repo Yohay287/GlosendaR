@@ -2,7 +2,7 @@ Package: GlosendaR
 Title: Download GPS Tracking Data from the Glosendas OrniTrack Portal
 Version: 0.1.0
 Authors@R: 
-    person("Yohay", "Wasserlauf", email = "yohay287@gmail.com", role = c("aut", "cre"))
+    person("Your", "Name", email = "your.email@example.com", role = c("aut", "cre"))
 Description: Provides a simple interface to authenticate with the Glosendas 
     OrniTrack wildlife tracking portal (https://cpanel.glosendas.net) and 
     download GPS and sensor data for tagged animals. Supports filtering by 
@@ -16,11 +16,14 @@ Imports:
     httr,
     stringr,
     lubridate,
-    curl
+    curl,
+    stats
+Suggests:
+    moments
 Suggests:
     testthat (>= 3.0.0),
     knitr,
     rmarkdown
 Config/testthat/edition: 3
-URL: https://github.com/Yohay287/GlosendaR
-BugReports: https://github.com/Yohay287/GlosendaR/issues
+URL: https://github.com/your-github-username/GlosendaR
+BugReports: https://github.com/your-github-username/GlosendaR/issues
