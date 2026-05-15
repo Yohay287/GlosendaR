@@ -38,9 +38,6 @@
 #' @param format_code Integer \code{0}–\code{5}:
 #'   \code{0} GPS+SENSORS, \code{1} GPS, \code{2} SENSORS,
 #'   \code{3} GPS+SENSORS_V2 (default), \code{4} GPS_V2, \code{5} SENSORS_V2.
-#' @param save_csv Logical. Save a timestamped CSV to \code{output_dir}.
-#'   The data frame is always returned. Default: \code{TRUE}.
-#' @param output_dir Character. Folder for CSV. Default: \code{"glosendas_data"}.
 #' @param drop_empty_cols Logical. Drop columns that are entirely \code{NA}
 #'   (e.g. \code{depth_m}). Default: \code{TRUE}.
 #' @param verbose Logical. Print progress messages. Default: \code{TRUE}.
@@ -68,7 +65,7 @@ glosendas_download <- function(username,
                                to_dt           = format(Sys.time(),
                                                         "%Y-%m-%d %H:%M"),
                                format_code     = 3,
-                               save_csv        = TRUE,
+                               save_csv        = FALSE,
                                output_dir      = "glosendas_data",
                                drop_empty_cols = TRUE,
                                verbose         = TRUE) {
@@ -306,7 +303,6 @@ glosendas_list_devices <- function(username, password,
     message("  From    : ", from_dt)
     message("  To      : ", to_dt)
     message("  Devices : ", length(sns))
-    message("  Save CSV: ", if (save_csv) output_dir else "no")
     message("")
   }
 
@@ -345,20 +341,6 @@ glosendas_list_devices <- function(username, password,
   }
 
   combined <- c(header_row, unlist(all_lines))
-
-  if (save_csv) {
-    dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
-    ts       <- format(Sys.time(), "%Y%m%d_%H%M%S")
-    out_file <- file.path(output_dir,
-                          paste0("glosendas_",
-                                 tolower(gsub("[^a-zA-Z0-9]", "_",
-                                              format_label)),
-                                 "_", ts, ".csv"))
-    writeLines(combined, out_file)
-    if (verbose)
-      message(sprintf("\n  Saved : %s (%.1f KB)",
-                      out_file, file.size(out_file) / 1024))
-  }
 
   # Build data frame
   df <- tryCatch(
@@ -484,6 +466,62 @@ glosendas_list_devices <- function(username, password,
   }
   message("  ", strrep("-", 92))
   invisible(smry)
+}
+
+
+
+# ==============================================================================
+#' Save a Glosendas data frame to a clean CSV file
+#'
+#' Exports a data frame returned by \code{\link{glosendas_download}} (or
+#' processed by \code{\link{analyze_acc}}) to a CSV. Because the export is
+#' from the already-clean R object, the output contains no gap rows — unlike
+#' saving directly from the portal which includes a blank line after every row.
+#'
+#' @param df Data frame to save.
+#' @param output_dir Character. Folder to save into. Created automatically if
+#'   it does not exist. Default: \code{"glosendas_data"}.
+#' @param filename Character. Custom filename (without path). If \code{NULL}
+#'   (default) a timestamped name is generated automatically.
+#' @param verbose Logical. Print the saved path. Default: \code{TRUE}.
+#'
+#' @return The full file path of the saved CSV, invisibly.
+#'
+#' @examples
+#' \dontrun{
+#' df <- glosendas_download("myuser", "mypass", filter_word = "Houbara")
+#' glosendas_save(df)
+#' glosendas_save(df, output_dir = "C:/MyData", filename = "houbara_may2026.csv")
+#'
+#' gps_df <- analyze_acc(df)
+#' glosendas_save(gps_df, output_dir = "C:/MyData")
+#' }
+#'
+#' @export
+glosendas_save <- function(df,
+                           output_dir = "glosendas_data",
+                           filename   = NULL,
+                           verbose    = TRUE) {
+
+  if (!is.data.frame(df)) stop("`df` must be a data frame.")
+  if (nrow(df) == 0)      stop("`df` has zero rows.")
+
+  dir.create(output_dir, showWarnings = FALSE, recursive = TRUE)
+
+  if (is.null(filename)) {
+    ts       <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    filename <- paste0("glosendas_", ts, ".csv")
+  }
+
+  out_file <- file.path(output_dir, filename)
+  utils::write.csv(df, out_file, row.names = FALSE, na = "NA")
+
+  fsize <- file.size(out_file)
+  if (verbose)
+    message(sprintf("Saved: %s (%.1f KB, %d rows x %d cols)",
+                    out_file, fsize / 1024, nrow(df), ncol(df)))
+
+  invisible(out_file)
 }
 
 # ==============================================================================

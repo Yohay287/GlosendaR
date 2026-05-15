@@ -48,8 +48,8 @@ df <- glosendas_download(
   from_dt         = "2026-01-01 00:00", # start date (UTC); default = 7 days ago
   to_dt           = "2026-05-12 23:59", # end date (UTC);   default = now
   format_code     = 3,                  # data format (see table below)
-  save_csv        = TRUE,               # save a CSV file to output_dir?
-  output_dir      = "glosendas_data",   # folder for CSV (only used if save_csv = TRUE)
+  save_csv        = FALSE,              # save a CSV file? (default off)
+  output_dir      = "glosendas_data",   # folder for CSV (used when save_csv = TRUE)
   drop_empty_cols = TRUE,               # drop columns that are entirely NA?
   verbose         = TRUE                # print progress messages?
 )
@@ -94,20 +94,26 @@ df <- glosendas_download(
 )
 ```
 
-#### CSV saving
+#### Saving to CSV
 
-The R data frame is **always** returned. The CSV file is optional:
+CSV saving is **off by default** (`save_csv = FALSE`). When enabled, the file
+is written from the clean R dataframe — so no gap rows, ever.
+
 ```r
-# No CSV saved — just the R data frame (faster, no disk writes)
+# Save to default folder (glosendas_data/) with auto-generated filename
 df <- glosendas_download("myuser", "mypass",
         filter_word = "Houbara",
-        save_csv    = FALSE)
+        save_csv    = TRUE)
 
-# Save CSV to a custom folder (default behaviour)
+# Save to a custom folder and filename
 df <- glosendas_download("myuser", "mypass",
         filter_word = "Houbara",
         save_csv    = TRUE,
-        output_dir  = "C:/MyData/Houbara")
+        output_dir  = "C:/MyData")
+
+# Save after ACC analysis
+gps_df <- analyze_acc(df)
+glosendas_save(gps_df, output_dir = "C:/MyData")
 ```
 
 ---
@@ -136,51 +142,6 @@ Returns a data frame with columns `sn`, `name`, and `imei`.
 
 ---
 
-### `analyze_acc()`
-
-Analyses accelerometer (ACC) bursts in the data frame returned by `glosendas_download()` and attaches per-burst statistics to the GPS row immediately preceding each burst. Handles any sampling frequency (5 Hz, 10 Hz, 20 Hz, 50 Hz, etc.) automatically.
-
-```r
-# Basic usage (mean, SD, ODBA per burst — default)
-gps_df <- analyze_acc(df)
-
-# Advanced metrics (adds range, quantiles, skewness, kurtosis,
-# covariance, correlation, axis differences, mean amplitude)
-# Requires: install.packages("moments")
-gps_df <- analyze_acc(df, advanced = TRUE)
-
-# Keep all original rows (raw ACC rows not removed)
-full_df <- analyze_acc(df, include_burst_rows = TRUE)
-
-# Wider GPS matching window (default is 10 seconds)
-gps_df <- analyze_acc(df, gps_window_sec = 30)
-```
-
-**How it works:**
-- Detects burst boundaries from `SEN_ACC_<N>Hz_START` / `SEN_ACC_<N>Hz_END` rows
-- Includes both START and END rows in calculations (both contain valid readings)
-- Uses `UTC_date` + `UTC_time` + `milliseconds` for sub-second duration accuracy
-- Attaches burst stats to the preceding GPS row (within `gps_window_sec`)
-- If no GPS row is nearby, inserts a new `ACC_SUMMARY` row instead
-- Handles truncated bursts (no END marker) gracefully
-
-**Basic columns added (always):**
-
-| Column | Description |
-|--------|-------------|
-| `acc_burst_n` | Number of ACC readings in the burst |
-| `acc_freq_hz` | Sampling frequency (Hz) |
-| `acc_duration_sec` | Burst duration in seconds |
-| `acc_x_mean` / `acc_x_sd` | Mean and SD — X axis |
-| `acc_y_mean` / `acc_y_sd` | Mean and SD — Y axis |
-| `acc_z_mean` / `acc_z_sd` | Mean and SD — Z axis |
-| `acc_odba` | Overall Dynamic Body Acceleration |
-| `acc_burst_type` | e.g. `"SEN_ACC_10Hz"` |
-
-**Advanced columns added (`advanced = TRUE`):**
-range, min, max, L2-norm, Q25/Q50/Q75, skewness, kurtosis (per axis);
-covariance and correlation between axis pairs (XY, XZ, YZ);
-mean and SD of axis differences; mean amplitude (mean |Δ|) per axis.
 
 ---
 
