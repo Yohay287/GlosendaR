@@ -258,9 +258,12 @@ glosendas_list_devices <- function(username, password,
   peek <- rawToChar(raw[seq_len(min(200, length(raw)))])
   if (grepl("<!DOCTYPE|<html", peek, ignore.case = TRUE))
     return(list(status = "html_error", lines = NULL))
-  lines <- strsplit(rawToChar(raw), "\n")[[1]]
-  # Strip blank lines (V1 formats emit a blank line between every data row)
-  lines <- lines[nzchar(trimws(lines))]
+  # Split on both \n and \r\n, strip ALL blank/whitespace-only lines.
+  # The portal emits one blank line after every data row in all formats.
+  txt_raw <- rawToChar(raw)
+  txt_raw <- gsub("\r", "", txt_raw, fixed = TRUE)
+  lines   <- strsplit(txt_raw, "\n", fixed = TRUE)[[1]]
+  lines   <- lines[nzchar(trimws(lines))]
   if (length(lines) < 2) return(list(status = "empty_csv", lines = NULL))
   list(status = "ok", lines = lines)
 }
@@ -364,6 +367,18 @@ glosendas_list_devices <- function(username, password,
                     na.strings = c("NA", "", "na", "N/A")),
     error = function(e) stop("Failed to parse downloaded CSV: ", conditionMessage(e))
   )
+
+  # Drop gap rows — the portal emits a blank line after every data row;
+  # these become all-NA rows after read.csv(). Any row without a device_id is a gap.
+  if ("device_id" %in% names(df)) {
+    n_gap <- sum(is.na(df$device_id) | trimws(as.character(df$device_id)) == "")
+    if (n_gap > 0) {
+      if (verbose)
+        message(sprintf("  Removed %d gap row(s) (blank lines from portal)", n_gap))
+      df <- df[!is.na(df$device_id) & trimws(as.character(df$device_id)) != "", ]
+      rownames(df) <- NULL
+    }
+  }
 
   # Normalise column names across V1/V2 formats
   df <- .gl_normalise_cols(df)
@@ -469,4 +484,49 @@ glosendas_list_devices <- function(username, password,
   }
   message("  ", strrep("-", 92))
   invisible(smry)
+}
+
+# ==============================================================================
+#' Remove gap rows from a Glosendas data frame
+#'
+#' The Glosendas portal emits one blank line after every data row. When a CSV
+#' is loaded directly with \code{read.csv()}, these become rows of all
+#' \code{NA}s. \code{glosendas_clean()} removes them. Data frames returned by
+#' \code{glosendas_download()} are already cleaned automatically; use this
+#' function when loading a previously-saved CSV file.
+#'
+#' @param df A data frame loaded from a Glosendas CSV file.
+#' @param verbose Logical. Report how many rows were removed. Default: \code{TRUE}.
+#'
+#' @return The data frame with gap rows removed.
+#'
+#' @examples
+#' \dontrun{
+#' df <- read.csv("glosendas_gps_sensors_v2_20260515.csv",
+#'               stringsAsFactors = FALSE, check.names = FALSE)
+#' df <- glosendas_clean(df)
+#' }
+#'
+#' @export
+glosendas_clean <- function(df, verbose = TRUE) {
+  if (!is.data.frame(df)) stop("`df` must be a data frame.")
+  if (!"device_id" %in% names(df))
+    stop("`df` must have a `device_id` column.")
+
+  gap_mask <- is.na(df$device_id) |
+              trimws(as.character(df$device_id)) == ""
+
+  n_gap <- sum(gap_mask)
+  if (n_gap == 0) {
+    if (verbose) message("No gap rows found.")
+    return(df)
+  }
+
+  df <- df[!gap_mask, ]
+  rownames(df) <- NULL
+
+  if (verbose)
+    message(sprintf("Removed %d gap row(s). %d rows remaining.", n_gap, nrow(df)))
+
+  df
 }

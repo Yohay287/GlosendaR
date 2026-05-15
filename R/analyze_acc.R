@@ -70,6 +70,20 @@ analyze_acc <- function(df,
     stop("Package 'moments' is needed for advanced = TRUE.\n",
          "Install with: install.packages('moments')")
 
+  # ── drop gap rows (blank lines from portal become all-NA rows) ─────────────
+  # This protects against CSVs saved before the blank-line fix was applied,
+  # or any file loaded directly with read.csv() without pre-cleaning.
+  if ("device_id" %in% names(df)) {
+    gap_mask <- is.na(df$device_id) | trimws(as.character(df$device_id)) == ""
+    if (any(gap_mask)) {
+      if (verbose)
+        message(sprintf("  Removed %d gap row(s) before ACC analysis",
+                        sum(gap_mask)))
+      df <- df[!gap_mask, ]
+      rownames(df) <- NULL
+    }
+  }
+
   # ── coerce ACC to numeric ───────────────────────────────────────────────────
   df$acc_x <- suppressWarnings(as.numeric(df$acc_x))
   df$acc_y <- suppressWarnings(as.numeric(df$acc_y))
