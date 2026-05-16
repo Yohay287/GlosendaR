@@ -143,6 +143,39 @@ Returns a data frame with columns `sn`, `name`, and `imei`.
 ---
 
 
+
+---
+
+### `collapse_gps_burst()`
+
+Identifies GPS bursts — runs of **exactly** `burst_size` consecutive GPS fixes each ≤ `max_gap_sec` seconds apart — and collapses each burst into a single representative row. All other rows (ACC bursts, SENSORS, flight detection sequences of a different length) are left completely untouched.
+
+```r
+# Collapse 5-fix bursts using the mean (default)
+df_c <- collapse_gps_burst(df, burst_size = 5)
+
+# Use the first or last fix instead
+df_c <- collapse_gps_burst(df, burst_size = 5, method = "first")
+df_c <- collapse_gps_burst(df, burst_size = 5, method = "last")
+
+# Chain with ACC analysis
+df_c   <- collapse_gps_burst(df, burst_size = 5)
+gps_df <- analyze_acc(df_c)
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `burst_size` | Exact number of fixes per burst (device setting, constant) | `5` |
+| `method` | `"mean"`, `"first"`, or `"last"` | `"mean"` |
+| `max_gap_sec` | Max seconds between consecutive fixes in the same burst | `2` |
+
+**Key behaviour:**
+- Only collapses runs of **exactly** `burst_size` — longer flight detection sequences are never touched
+- `"mean"` rounds each column to the same decimal precision as the raw data
+- Datetime columns always use the first fix of the burst (averaging timestamps is meaningless)
+
 ---
 
 ## Working with the Data
