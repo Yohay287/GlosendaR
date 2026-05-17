@@ -154,17 +154,19 @@ analyze_acc <- function(df,
   time_diff  <- ifelse(has_prev,
                        burst_ts_num[boundaries$s] - gps_ts_num[pmax(fi,1L)],
                        NA_real_)
-  # Allow GPS fix to be up to 1 second AFTER burst start — handles the common
-  # case where GPS and ACC_START share the same second but the GPS precise
-  # timestamp is fractionally later (e.g. GPS at :10.227, burst at :10.200).
+  # Allow GPS fix to be up to 10 seconds AFTER burst start — handles cases where
+  # GPS and ACC_START share the same second but the GPS precise timestamp is
+  # fractionally later due to acquisition timing.
   in_window  <- has_prev & !is.na(time_diff) &
-                time_diff >= -1 & time_diff <= gps_window_sec
+                time_diff >= -10 & time_diff <= gps_window_sec
 
   # Rule 2: GPS fix is EXACTLY one row before the ACC_START AND within 5 minutes.
   # Covers cases where the tag records a single GPS fix immediately before a burst
-  # with no other rows in between — regardless of time gap up to 5 minutes.
+  # with no other rows in between. The GPS timestamp can be up to 10 seconds AFTER
+  # the burst start (time_diff >= -10) — the device records GPS and ACC simultaneously
+  # but the GPS precise timestamp can lag by ~1 second due to acquisition timing.
   prev_row_is_gps <- has_prev & (gps_idx[pmax(fi,1L)] == boundaries$s - 1L)
-  within_5min     <- has_prev & !is.na(time_diff) & time_diff <= 300 & time_diff >= -1
+  within_5min     <- has_prev & !is.na(time_diff) & time_diff <= 300 & time_diff >= -10
   rule2           <- prev_row_is_gps & within_5min & !in_window
 
   matched       <- in_window | rule2
