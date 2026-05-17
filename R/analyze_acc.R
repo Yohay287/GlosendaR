@@ -135,7 +135,8 @@ analyze_acc <- function(df,
   )
   all_num_cols <- if (advanced) c(basic_cols, adv_cols) else basic_cols
   for (col in all_num_cols) df[[col]] <- NA_real_
-  df$acc_burst_type <- NA_character_
+  df$acc_burst_type    <- NA_character_
+  df$gps_to_burst_sec  <- NA_real_
 
   gps_idx      <- which(is_gps)
   burst_ts_num <- as.numeric(df$UTC_precise)
@@ -158,8 +159,24 @@ analyze_acc <- function(df,
   # timestamp is fractionally later (e.g. GPS at :10.227, burst at :10.200).
   in_window  <- has_prev & !is.na(time_diff) &
                 time_diff >= -1 & time_diff <= gps_window_sec
-  target_gps <- ifelse(in_window, gps_idx[pmax(fi,1L)], NA_integer_)
-  orphan_src <- which(!in_window)
+
+  # Rule 2: GPS fix is EXACTLY one row before the ACC_START AND within 5 minutes.
+  # Covers cases where the tag records a single GPS fix immediately before a burst
+  # with no other rows in between — regardless of time gap up to 5 minutes.
+  prev_row_is_gps <- has_prev & (gps_idx[pmax(fi,1L)] == boundaries$s - 1L)
+  within_5min     <- has_prev & !is.na(time_diff) & time_diff <= 300 & time_diff >= -1
+  rule2           <- prev_row_is_gps & within_5min & !in_window
+
+  matched       <- in_window | rule2
+  target_gps    <- ifelse(matched, gps_idx[pmax(fi,1L)], NA_integer_)
+
+  # Time difference column: GPS precise time - burst start precise time (seconds)
+  # Positive = GPS is before burst; negative = GPS is fractionally after burst start
+  gps_to_burst_sec <- ifelse(matched,
+                              round(time_diff, 2),
+                              NA_real_)
+
+  orphan_src <- which(!matched)
 
   # ── assign burst ID to every ACC row for tapply grouping ─────────────────────
   # Small loop over n_bursts (integer assignment only — fast even for 100k bursts)
@@ -262,7 +279,8 @@ analyze_acc <- function(df,
   b_idx    <- which(!is.na(target_gps))
   for (col in all_num_cols)
     df[[col]][attached] <- stat_mat[b_idx, col]
-  df$acc_burst_type[attached] <- type_vec[b_idx]
+  df$acc_burst_type[attached]   <- type_vec[b_idx]
+  df$gps_to_burst_sec[attached] <- gps_to_burst_sec[b_idx]
 
   n_attached <- length(attached)
   n_new_row  <- length(orphan_src)
@@ -289,7 +307,8 @@ analyze_acc <- function(df,
       new_row$datatype    <- "ACC_SUMMARY"
       new_row$UTC_precise <- NULL
       for (col in all_num_cols) new_row[[col]] <- stat_mat[b, col]
-      new_row$acc_burst_type <- type_vec[b]
+      new_row$acc_burst_type   <- type_vec[b]
+      new_row$gps_to_burst_sec <- NA_real_
       if (pos == 0L) {
         out <- rbind(new_row, out)
       } else if (pos >= nrow(out)) {
@@ -313,7 +332,11 @@ analyze_acc <- function(df,
     message(sprintf("  Bursts processed     : %d", n_bursts_raw))
     if(n_skip >0L) message(sprintf("  Skipped (< 2 pts)    : %d", n_skip))
     if(n_trunc>0L) message(sprintf("  Truncated bursts     : %d", n_trunc))
-    message(sprintf("  Attached to GPS row  : %d", n_attached))
+    n_rule1 <- sum(in_window,  na.rm=TRUE)
+    n_rule2 <- sum(rule2,      na.rm=TRUE)
+    message(sprintf("  Attached (window)    : %d", n_rule1))
+    message(sprintf("  Attached (prev row)  : %d", n_rule2))
+    message(sprintf("  Total attached       : %d", n_attached))
     message(sprintf("  New ACC_SUMMARY rows : %d", n_new_row))
     message(sprintf("  Output rows          : %d", nrow(out)))
     message(sprintf("  ACC columns added    : %d", length(all_num_cols)+1L))
