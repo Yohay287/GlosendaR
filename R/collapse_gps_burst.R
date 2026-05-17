@@ -57,7 +57,7 @@ collapse_gps_burst <- function(df,
     stop("`df` has zero rows.")
   # burst_size can be a vector (e.g. from detect_gps_burst()$collapse_sizes)
   # If multiple sizes supplied, apply largest first then descend
-  burst_size <- as.integer(round(burst_size))
+  burst_size <- as.integer(round(as.numeric(burst_size)))
   if (any(is.na(burst_size)) || any(burst_size < 2))
     stop("`burst_size` must contain integers >= 2.")
 
