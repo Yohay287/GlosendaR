@@ -2,6 +2,7 @@
 
 export(analyze_acc)
 export(collapse_gps_burst)
+export(detect_gps_burst)
 export(glosendas_clean)
 export(glosendas_download)
 export(glosendas_list_devices)

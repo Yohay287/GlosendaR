@@ -144,6 +144,42 @@ Returns a data frame with columns `sn`, `name`, and `imei`.
 
 
 
+
+---
+
+### `detect_gps_burst()`
+
+Analyses the GPS fix pattern and automatically detects programmed GPS bursts. Fully vectorised — runs in milliseconds on any dataset size.
+
+```r
+# Detect dominant burst size (default: must appear >= 10 times)
+info <- detect_gps_burst(df)
+
+# Include truncated bursts (partial sequences from missed fixes)
+info <- detect_gps_burst(df, include_truncated = TRUE)
+
+# Lower threshold for shorter datasets
+info <- detect_gps_burst(df, min_sequences = 5)
+
+# Pipe directly into collapse_gps_burst()
+df_c <- collapse_gps_burst(df, burst_size = info$burst_size)
+
+# Collapse dominant + truncated sizes (apply largest first)
+for (sz in rev(info$collapse_sizes)) {
+  df_c <- collapse_gps_burst(df_c, burst_size = sz)
+}
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `min_sequences` | Min times a run length must appear to be a valid burst | `10` |
+| `max_gap_sec` | Max seconds between fixes within the same burst | `2` |
+| `include_truncated` | Include shorter (truncated) bursts in `collapse_sizes` | `FALSE` |
+
+**The returned list contains:** `burst_size`, `n_bursts`, `burst_pct`, `interval_summary` (median/mean/SD/range), `collapse_sizes` (ready to pass to `collapse_gps_burst()`), `all_candidates`, `all_run_lengths`, `total_gps_fixes`.
+
 ---
 
 ### `collapse_gps_burst()`
