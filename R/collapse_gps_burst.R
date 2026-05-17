@@ -7,23 +7,14 @@
 #' flight detection sequences of a different length) are left completely
 #' untouched.
 #'
-#' \strong{Burst detection rule:} a run of consecutive GPS rows qualifies as a
-#' burst only when its length equals \code{burst_size} exactly. Longer runs
-#' (e.g. flight detection sequences) are never collapsed.
-#'
-#' \strong{Mean rounding:} when \code{method = "mean"}, each numeric column is
-#' rounded to the same number of decimal places found in the raw data for that
-#' column, so coordinate precision is preserved.
-#'
-#' \strong{Datetime on mean rows:} the first timestamp of the burst is used
-#' (averaging timestamps is meaningless).
+#' The function is fully vectorised and runs efficiently on datasets of any
+#' size.
 #'
 #' @param df A data frame containing GPS tracking data, as returned by
 #'   \code{\link{glosendas_download}} or loaded from a Glosendas CSV.
 #'   Must contain columns \code{datatype} and \code{UTC_datetime}.
 #' @param burst_size Integer >= 2. The exact number of fixes that constitute
-#'   one GPS burst. This is a device setting defined by the user and is
-#'   constant across the dataset. Default: \code{5}.
+#'   one GPS burst. Default: \code{5}.
 #' @param method Character. How to represent the collapsed burst:
 #'   \itemize{
 #'     \item \code{"mean"}  — mean of all numeric columns, rounded to the
@@ -32,25 +23,24 @@
 #'     \item \code{"last"}  — last fix of the burst
 #'   }
 #' @param max_gap_sec Numeric. Maximum seconds between consecutive GPS fixes
-#'   that are still considered part of the same burst. Default: \code{2}.
+#'   still considered part of the same burst. Default: \code{2}.
 #' @param verbose Logical. Print a processing summary. Default: \code{TRUE}.
 #'
 #' @return A data frame with the same columns as \code{df}. Each GPS burst of
-#'   exactly \code{burst_size} rows is replaced by a single row. The number of
-#'   rows removed equals \code{n_bursts * (burst_size - 1)}.
+#'   exactly \code{burst_size} rows is replaced by a single representative row.
 #'
 #' @examples
 #' \dontrun{
 #' df <- glosendas_download("myuser", "mypass", filter_word = "Houbara")
 #'
-#' # Collapse 5-fix bursts using the mean (default)
-#' df_c <- collapse_gps_burst(df, burst_size = 5)
+#' # Detect burst size first
+#' info <- detect_gps_burst(df)
 #'
-#' # Use the first fix instead
+#' # Collapse using the detected size
+#' df_c <- collapse_gps_burst(df, burst_size = info$burst_size)
+#'
+#' # Use first fix instead of mean
 #' df_c <- collapse_gps_burst(df, burst_size = 5, method = "first")
-#'
-#' # Then continue with ACC analysis on the collapsed data
-#' gps_df <- analyze_acc(df_c)
 #' }
 #'
 #' @export
@@ -60,7 +50,7 @@ collapse_gps_burst <- function(df,
                                max_gap_sec = 2,
                                verbose     = TRUE) {
 
-  # ── input guards ────────────────────────────────────────────────────────────
+  # ── guards ───────────────────────────────────────────────────────────────────
   if (!is.data.frame(df))
     stop("`df` must be a data frame.")
   if (nrow(df) == 0)
@@ -70,70 +60,63 @@ collapse_gps_burst <- function(df,
     stop("`burst_size` must be a single integer >= 2.")
   if (!method %in% c("first", "last", "mean"))
     stop('`method` must be "first", "last", or "mean".')
-  if (!is.numeric(max_gap_sec) || length(max_gap_sec) != 1 ||
-      max_gap_sec < 0)
+  if (!is.numeric(max_gap_sec) || length(max_gap_sec) != 1 || max_gap_sec < 0)
     stop("`max_gap_sec` must be a non-negative number.")
 
-  required <- c("datatype", "UTC_datetime")
-  missing  <- setdiff(required, names(df))
-  if (length(missing) > 0)
-    stop("Missing required columns: ", paste(missing, collapse = ", "))
+  miss <- setdiff(c("datatype", "UTC_datetime"), names(df))
+  if (length(miss))
+    stop("Missing required columns: ", paste(miss, collapse = ", "))
 
   burst_size <- as.integer(burst_size)
 
   # ── parse datetime ───────────────────────────────────────────────────────────
-  # Try multiple formats robustly
   dt <- .parse_dt_multi(df$UTC_datetime)
-  if (sum(!is.na(dt)) == 0)
-    stop("Could not parse `UTC_datetime`. Supported formats: ",
-         "YYYY-MM-DDTHH:MM:SSZ, YYYY-MM-DD HH:MM:SS, DD/MM/YYYY HH:MM:SS.")
 
-  is_gps <- !is.na(df$datatype) & df$datatype == "GPS"
+  # ── identify GPS rows ────────────────────────────────────────────────────────
+  is_gps <- !is.na(df$datatype) & trimws(df$datatype) == "GPS"
 
   if (!any(is_gps)) {
     if (verbose) message("No GPS rows found — returning df unchanged.")
     return(df)
   }
 
-  # ── detect decimal places per column (from GPS rows only) ───────────────────
-  # Apply to a sample of GPS rows for speed on large datasets
-  gps_sample <- which(is_gps)
-  if (length(gps_sample) > 500L)
-    gps_sample <- gps_sample[seq(1L, length(gps_sample), length.out = 500L)]
+  # ── vectorised burst detection ───────────────────────────────────────────────
+  # Strategy: work on the full row index.
+  # For each row, compute the gap to the NEXT row (in seconds).
+  # A gap is a "burst gap" only when:
+  #   - current row is GPS
+  #   - next row is GPS
+  #   - gap is between 1 and max_gap_sec seconds
+  n <- nrow(df)
 
-  col_dec <- vapply(names(df), function(cn) {
-    .max_decimals(df[[cn]][gps_sample])
-  }, integer(1L))
-  names(col_dec) <- names(df)
+  # Gap vector aligned to row i = gap between row i and row i+1
+  dt_num <- as.numeric(dt)   # seconds since epoch; NA for non-parseable
 
-  # ── identify burst membership ─────────────────────────────────────────────
-  n        <- nrow(df)
-  in_burst <- logical(n)
-  i        <- 1L
+  gap_to_next <- c(dt_num[-1] - dt_num[-n], NA_real_)
+  gap_rounded <- round(gap_to_next)
 
-  while (i <= n) {
-    if (!is_gps[i] || is.na(dt[i])) { i <- i + 1L; next }
+  both_gps <- is_gps & c(is_gps[-1], FALSE)   # row i AND row i+1 are GPS
 
-    # Extend run of GPS fixes within max_gap_sec
-    run <- i
-    j   <- i + 1L
-    while (j <= n && is_gps[j] && !is.na(dt[j]) &&
-           as.numeric(difftime(dt[j], dt[run[length(run)]],
-                               units = "secs")) <= max_gap_sec) {
-      run <- c(run, j)
-      j   <- j + 1L
-    }
+  is_burst_gap <- both_gps &
+    !is.na(gap_rounded) &
+    gap_rounded >= 1L &
+    gap_rounded <= max_gap_sec
 
-    # Only mark as burst if EXACTLY burst_size
-    if (length(run) == burst_size) {
-      in_burst[run] <- TRUE
-      i <- j
-    } else {
-      i <- i + 1L
-    }
-  }
+  # RLE on the burst-gap indicator
+  rle_bg    <- rle(is_burst_gap)
+  rv        <- rle_bg$values
+  rl        <- rle_bg$lengths
 
-  n_bursts <- sum(in_burst) / burst_size
+  # End position (row index) of each run
+  run_ends   <- cumsum(rl)
+  run_starts <- c(1L, run_ends[-length(run_ends)] + 1L)
+
+  # TRUE runs of length k = k consecutive burst gaps = k+1 consecutive GPS fixes
+  # A burst of exactly burst_size fixes has exactly burst_size-1 burst gaps
+  burst_gap_count <- burst_size - 1L
+  burst_run_idx   <- which(rv & rl == burst_gap_count)
+
+  n_bursts <- length(burst_run_idx)
 
   if (n_bursts == 0L) {
     if (verbose)
@@ -143,84 +126,84 @@ collapse_gps_burst <- function(df,
     return(df)
   }
 
-  # ── datetime columns to always take from first fix (never average) ──────────
+  # Row indices of the first and last fix of each burst
+  burst_first_row <- run_starts[burst_run_idx]          # first gap starts here
+  burst_last_row  <- run_ends[burst_run_idx] + 1L       # last fix is one beyond
+
+  # ── detect decimal places per numeric column (vectorised, sampled) ───────────
+  gps_rows_idx <- which(is_gps)
+  sample_idx   <- if (length(gps_rows_idx) > 500L)
+    gps_rows_idx[seq(1L, length(gps_rows_idx), length.out = 500L)]
+  else gps_rows_idx
+
+  col_dec <- vapply(names(df), function(cn)
+    .max_decimals(df[[cn]][sample_idx]), integer(1L))
+  names(col_dec) <- names(df)
+
+  # Datetime columns: always take first fix, never average
   dt_col_names <- intersect(
     c("UTC_datetime", "UTC_date", "UTC_time", "UTC_timestamp", "UTC_precise"),
     names(df)
   )
 
-  # ── build output ─────────────────────────────────────────────────────────────
-  # Pre-allocate index vector: which row index to keep for each output row
-  keep_rows  <- integer(n - as.integer(n_bursts) * (burst_size - 1L))
-  out_count  <- 0L
+  # ── build a logical mask: which rows to KEEP ─────────────────────────────────
+  # For each burst keep only the representative row, drop the rest.
+  keep <- rep(TRUE, n)
 
-  # For mean method, store replacement values per burst
-  mean_patches <- list()   # list of list(row_idx, col, value)
-
-  i <- 1L
-  while (i <= n) {
-
-    if (!in_burst[i]) {
-      out_count          <- out_count + 1L
-      keep_rows[out_count] <- i
-      i <- i + 1L
-      next
+  if (method == "first") {
+    # Keep first row of burst, drop rows 2..burst_size
+    for (i in seq_len(n_bursts)) {
+      keep[seq(burst_first_row[i] + 1L, burst_last_row[i])] <- FALSE
     }
-
-    # Collect contiguous burst block
-    end <- i
-    while (end + 1L <= n && in_burst[end + 1L]) end <- end + 1L
-    burst_idx <- seq(i, end)
-
-    # The representative row index in the ORIGINAL df
-    rep_idx <- switch(method,
-      first = i,
-      last  = end,
-      mean  = i        # placeholder; patched below
-    )
-
-    out_count            <- out_count + 1L
-    keep_rows[out_count] <- rep_idx
-
-    # For mean, compute replacements without touching df yet
-    if (method == "mean") {
-      burst_sub <- df[burst_idx, , drop = FALSE]
-      patches   <- list()
-
-      for (cn in names(df)) {
-        if (cn %in% dt_col_names) next   # datetime: keep first, no patching
-
-        vals <- suppressWarnings(as.numeric(burst_sub[[cn]]))
-        if (all(is.na(vals))) next       # all NA or non-numeric: keep first
-
-        m   <- mean(vals, na.rm = TRUE)
-        dec <- col_dec[cn]
-
-        val_out <- if (dec == 0L) {
-          as.character(round(m))
-        } else {
-          format(round(m, dec), nsmall = dec, trim = TRUE)
-        }
-        patches[[cn]] <- val_out
-      }
-      mean_patches[[length(mean_patches) + 1L]] <-
-        list(out_row = out_count, patches = patches)
+  } else if (method == "last") {
+    # Keep last row of burst, drop rows 1..(burst_size-1)
+    for (i in seq_len(n_bursts)) {
+      keep[seq(burst_first_row[i], burst_last_row[i] - 1L)] <- FALSE
     }
-
-    i <- end + 1L
+  } else {
+    # mean: keep first row (as template), drop the rest, then patch values
+    for (i in seq_len(n_bursts)) {
+      keep[seq(burst_first_row[i] + 1L, burst_last_row[i])] <- FALSE
+    }
   }
 
-  # ── slice df to keep rows ────────────────────────────────────────────────────
-  out           <- df[keep_rows[seq_len(out_count)], , drop = FALSE]
+  # Slice df once
+  out           <- df[keep, , drop = FALSE]
   rownames(out) <- NULL
 
-  # ── apply mean patches ────────────────────────────────────────────────────────
-  if (method == "mean" && length(mean_patches) > 0L) {
-    for (p in mean_patches) {
-      r <- p$out_row
-      for (cn in names(p$patches)) {
-        out[[cn]][r] <- p$patches[[cn]]
+  # ── apply mean patches ───────────────────────────────────────────────────────
+  if (method == "mean" && n_bursts > 0L) {
+    # Map original burst_first_row positions to output row positions
+    # keep is a logical vector; cumsum(keep) gives the output row index
+    keep_cumsum   <- cumsum(keep)
+    out_row_of    <- keep_cumsum[burst_first_row]   # output row for each burst's first fix
+
+    for (cn in names(df)) {
+      if (cn %in% dt_col_names) next   # datetime: keep first row value
+
+      # Try converting column to numeric
+      col_vals <- suppressWarnings(as.numeric(df[[cn]]))
+      if (all(is.na(col_vals[is_gps]))) next   # entirely non-numeric for GPS rows
+
+      dec <- col_dec[cn]
+
+      # Compute means for all bursts at once using matrix approach
+      # Extract burst values into a matrix (burst_size rows x n_bursts cols)
+      # then colMeans
+      burst_indices <- outer(0L:(burst_size - 1L), burst_first_row, `+`)
+      # burst_indices is burst_size x n_bursts matrix of original row indices
+      burst_vals    <- matrix(col_vals[burst_indices], nrow = burst_size)
+      burst_means   <- colMeans(burst_vals, na.rm = TRUE)
+
+      # Round to original decimal precision
+      rounded <- if (dec == 0L) {
+        as.character(round(burst_means))
+      } else {
+        format(round(burst_means, dec), nsmall = dec, trim = TRUE)
       }
+
+      # Assign to output rows (vectorised)
+      out[[cn]][out_row_of] <- rounded
     }
   }
 
@@ -229,9 +212,8 @@ collapse_gps_burst <- function(df,
     message(sprintf("  Method        : %s", method))
     message(sprintf("  Burst size    : %d fixes", burst_size))
     message(sprintf("  Max gap       : %g seconds", max_gap_sec))
-    message(sprintf("  Bursts found  : %d", as.integer(n_bursts)))
-    message(sprintf("  Rows removed  : %d",
-                    as.integer(n_bursts) * (burst_size - 1L)))
+    message(sprintf("  Bursts found  : %d", n_bursts))
+    message(sprintf("  Rows removed  : %d", n_bursts * (burst_size - 1L)))
     message(sprintf("  Input rows    : %d", nrow(df)))
     message(sprintf("  Output rows   : %d", nrow(out)))
   }
@@ -241,42 +223,34 @@ collapse_gps_burst <- function(df,
 
 
 # ==============================================================================
-# INTERNAL HELPERS
+# INTERNAL HELPERS (shared with detect_gps_burst.R)
 # ==============================================================================
 
 #' @noRd
-#' Parse datetime strings trying multiple formats, return POSIXct UTC.
 .parse_dt_multi <- function(x) {
   fmts <- c(
-    "%Y-%m-%dT%H:%M:%SZ",   # ISO 8601 with Z
-    "%Y-%m-%dT%H:%M:%S",    # ISO 8601 without Z
-    "%Y-%m-%d %H:%M:%S",    # standard
-    "%Y-%m-%d %H:%M",       # minute precision
-    "%d/%m/%Y %H:%M:%S",
-    "%d/%m/%Y %H:%M"
+    "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S",  "%Y-%m-%d %H:%M",
+    "%d/%m/%Y %H:%M:%S",  "%d/%m/%Y %H:%M"
   )
   result    <- rep(as.POSIXct(NA_real_, tz = "UTC"), length(x))
   remaining <- seq_along(x)
   for (fmt in fmts) {
-    if (length(remaining) == 0L) break
-    parsed <- suppressWarnings(
-      as.POSIXct(x[remaining], format = fmt, tz = "UTC"))
-    ok              <- !is.na(parsed)
+    if (!length(remaining)) break
+    parsed <- suppressWarnings(as.POSIXct(x[remaining], format = fmt, tz = "UTC"))
+    ok               <- !is.na(parsed)
     result[remaining[ok]] <- parsed[ok]
-    remaining       <- remaining[!ok]
+    remaining        <- remaining[!ok]
   }
   result
 }
 
 
 #' @noRd
-#' Return the maximum number of decimal places seen in a character/numeric vector.
 .max_decimals <- function(x) {
   x <- as.character(x)
   x <- x[!is.na(x) & nzchar(x) & grepl("\\.", x)]
-  if (length(x) == 0L) return(0L)
-  # cap sample for speed
+  if (!length(x)) return(0L)
   if (length(x) > 200L) x <- x[seq(1L, length(x), length.out = 200L)]
-  dec <- nchar(sub("^[^.]*\\.", "", x))
-  as.integer(max(dec, na.rm = TRUE))
+  as.integer(max(nchar(sub("^[^.]*\\.", "", x)), na.rm = TRUE))
 }
