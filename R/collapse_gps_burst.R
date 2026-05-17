@@ -55,9 +55,24 @@ collapse_gps_burst <- function(df,
     stop("`df` must be a data frame.")
   if (nrow(df) == 0)
     stop("`df` has zero rows.")
-  if (!is.numeric(burst_size) || length(burst_size) != 1 ||
-      burst_size < 2 || burst_size != round(burst_size))
-    stop("`burst_size` must be a single integer >= 2.")
+  # burst_size can be a vector (e.g. from detect_gps_burst()$collapse_sizes)
+  # If multiple sizes supplied, apply largest first then descend
+  burst_size <- as.integer(round(burst_size))
+  if (any(is.na(burst_size)) || any(burst_size < 2))
+    stop("`burst_size` must contain integers >= 2.")
+
+  if (length(burst_size) > 1L) {
+    if (verbose)
+      message(sprintf("Multiple burst sizes supplied: %s — applying largest first.",
+                      paste(sort(burst_size, decreasing = TRUE), collapse = ", ")))
+    for (sz in sort(burst_size, decreasing = TRUE)) {
+      df <- collapse_gps_burst(df, burst_size = sz, method = method,
+                               max_gap_sec = max_gap_sec, verbose = verbose)
+    }
+    return(df)
+  }
+
+  burst_size <- burst_size[1L]
   if (!method %in% c("first", "last", "mean"))
     stop('`method` must be "first", "last", or "mean".')
   if (!is.numeric(max_gap_sec) || length(max_gap_sec) != 1 || max_gap_sec < 0)
@@ -146,26 +161,24 @@ collapse_gps_burst <- function(df,
     names(df)
   )
 
-  # ── build a logical mask: which rows to KEEP ─────────────────────────────────
-  # For each burst keep only the representative row, drop the rest.
+  # ── build a logical mask: which rows to KEEP (fully vectorised) ──────────────
+  # Generate all row indices to DROP across all bursts at once,
+  # then set them FALSE in a single assignment.
   keep <- rep(TRUE, n)
 
-  if (method == "first") {
-    # Keep first row of burst, drop rows 2..burst_size
-    for (i in seq_len(n_bursts)) {
-      keep[seq(burst_first_row[i] + 1L, burst_last_row[i])] <- FALSE
-    }
-  } else if (method == "last") {
-    # Keep last row of burst, drop rows 1..(burst_size-1)
-    for (i in seq_len(n_bursts)) {
-      keep[seq(burst_first_row[i], burst_last_row[i] - 1L)] <- FALSE
-    }
+  if (method == "last") {
+    # Drop first (burst_size-1) rows of each burst
+    drop_starts <- burst_first_row
+    drop_ends   <- burst_last_row - 1L
   } else {
-    # mean: keep first row (as template), drop the rest, then patch values
-    for (i in seq_len(n_bursts)) {
-      keep[seq(burst_first_row[i] + 1L, burst_last_row[i])] <- FALSE
-    }
+    # first or mean: drop rows 2..burst_size of each burst
+    drop_starts <- burst_first_row + 1L
+    drop_ends   <- burst_last_row
   }
+
+  # Expand ranges to a single integer vector and set FALSE in one shot
+  drop_idx <- unlist(Map(seq, drop_starts, drop_ends), use.names = FALSE)
+  keep[drop_idx] <- FALSE
 
   # Slice df once
   out           <- df[keep, , drop = FALSE]
