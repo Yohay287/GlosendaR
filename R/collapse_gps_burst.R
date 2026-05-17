@@ -18,8 +18,8 @@
 #' @param method Character. How to represent the collapsed burst:
 #'   \itemize{
 #'     \item \code{"mean"}  — mean of all numeric columns, rounded to the
-#'       same decimal places as the raw data (default)
-#'     \item \code{"first"} — first fix of the burst
+#'       same decimal places as the raw data
+#'     \item \code{"first"} — first fix of the burst (default)
 #'     \item \code{"last"}  — last fix of the burst
 #'   }
 #' @param max_gap_sec Numeric. Maximum seconds between consecutive GPS fixes
@@ -46,7 +46,7 @@
 #' @export
 collapse_gps_burst <- function(df,
                                burst_size  = 5,
-                               method      = "mean",
+                               method      = "first",
                                max_gap_sec = 2,
                                verbose     = TRUE) {
 

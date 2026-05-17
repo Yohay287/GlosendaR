@@ -270,23 +270,36 @@ analyze_acc <- function(df,
   out            <- df[keep_mask,,drop=FALSE]
   rownames(out)  <- NULL
 
-  # insert orphan ACC_SUMMARY rows (rare)
+  # insert orphan ACC_SUMMARY rows (rare — only when no GPS precedes a burst)
+  if (n_new_row > 0L && verbose)
+    message(sprintf("  Inserting %d ACC_SUMMARY orphan row(s)...", n_new_row))
   if (n_new_row > 0L) {
-    orig_idx <- which(keep_mask)
+    # Process in reverse order so earlier insertions do not shift later positions.
+    # Instead of tracking orig_idx through insertions, recompute position each time
+    # from the original keep_mask (valid for rows that existed before any insertion).
+    orig_rows <- which(keep_mask)   # original row numbers that survived the slice
     for (b in rev(orphan_src)) {
-      s <- boundaries$s[b]
-      pos <- sum(orig_idx < s)
-      new_row          <- df[s,,drop=FALSE]
-      new_row$datatype <- "ACC_SUMMARY"
+      s   <- boundaries$s[b]
+      # How many original rows come before burst start s?
+      pos <- sum(orig_rows < s, na.rm = TRUE)
+      new_row             <- df[s, , drop = FALSE]
+      new_row$datatype    <- "ACC_SUMMARY"
       new_row$UTC_precise <- NULL
-      for (col in all_num_cols) new_row[[col]] <- stat_mat[b,col]
+      for (col in all_num_cols) new_row[[col]] <- stat_mat[b, col]
       new_row$acc_burst_type <- type_vec[b]
-      out <- if(pos==0L) rbind(new_row,out) else
-             if(pos>=nrow(out)) rbind(out,new_row) else
-             rbind(out[seq_len(pos),,drop=FALSE],new_row,
-                   out[(pos+1L):nrow(out),,drop=FALSE])
-      orig_idx <- c(orig_idx[seq_len(pos)],NA_integer_,
-                    orig_idx[seq(pos+1L,length(orig_idx))])
+      if (pos == 0L) {
+        out <- rbind(new_row, out)
+      } else if (pos >= nrow(out)) {
+        out <- rbind(out, new_row)
+      } else {
+        out <- rbind(out[seq_len(pos), , drop = FALSE],
+                     new_row,
+                     out[(pos + 1L):nrow(out), , drop = FALSE])
+      }
+      # Insert NA placeholder in orig_rows so positions stay aligned
+      # for any subsequent (earlier) orphan insertions
+      orig_rows <- c(orig_rows[seq_len(pos)], NA_integer_,
+                     orig_rows[seq(pos + 1L, length(orig_rows))])
     }
     rownames(out) <- NULL
   }
