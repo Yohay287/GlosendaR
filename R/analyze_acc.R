@@ -283,6 +283,8 @@ analyze_acc <- function(df,
     df[[col]][attached] <- stat_mat[b_idx, col]
   df$acc_burst_type[attached]   <- type_vec[b_idx]
   df$gps_to_burst_sec[attached] <- gps_to_burst_sec[b_idx]
+  # Mark GPS rows that have ACC data attached
+  df$datatype[attached] <- "GPS_ACC"
 
   n_attached <- length(attached)
   n_new_row  <- length(orphan_src)
