@@ -153,8 +153,11 @@ analyze_acc <- function(df,
   time_diff  <- ifelse(has_prev,
                        burst_ts_num[boundaries$s] - gps_ts_num[pmax(fi,1L)],
                        NA_real_)
+  # Allow GPS fix to be up to 1 second AFTER burst start — handles the common
+  # case where GPS and ACC_START share the same second but the GPS precise
+  # timestamp is fractionally later (e.g. GPS at :10.227, burst at :10.200).
   in_window  <- has_prev & !is.na(time_diff) &
-                time_diff >= 0 & time_diff <= gps_window_sec
+                time_diff >= -1 & time_diff <= gps_window_sec
   target_gps <- ifelse(in_window, gps_idx[pmax(fi,1L)], NA_integer_)
   orphan_src <- which(!in_window)
 
