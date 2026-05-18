@@ -119,23 +119,23 @@ analyze_acc <- function(df,
 
   # ── initialise output columns ────────────────────────────────────────────────
   basic_cols <- c("acc_burst_n","acc_freq_hz","acc_duration_sec",
-                  "acc_x_mean","acc_x_sd","acc_y_mean","acc_y_sd",
-                  "acc_z_mean","acc_z_sd","acc_odba")
+                  "mean_x","sd_x","mean_y","sd_y",
+                  "mean_z","sd_z","acc_odba")
   adv_cols <- c(
-    "acc_x_range","acc_y_range","acc_z_range",
-    "acc_x_max","acc_y_max","acc_z_max",
-    "acc_x_min","acc_y_min","acc_z_min",
-    "acc_x_norm","acc_y_norm","acc_z_norm",
-    "acc_x_q25","acc_y_q25","acc_z_q25",
-    "acc_x_q50","acc_y_q50","acc_z_q50",
-    "acc_x_q75","acc_y_q75","acc_z_q75",
-    "acc_x_skew","acc_y_skew","acc_z_skew",
-    "acc_x_kurt","acc_y_kurt","acc_z_kurt",
-    "acc_cov_xy","acc_cov_xz","acc_cov_yz",
-    "acc_cor_xy","acc_cor_xz","acc_cor_yz",
-    "acc_meandiff_xy","acc_meandiff_xz","acc_meandiff_yz",
-    "acc_sddiff_xy","acc_sddiff_xz","acc_sddiff_yz",
-    "acc_amp_x","acc_amp_y","acc_amp_z"
+    "range_x","range_y","range_z",
+    "max_x","max_y","max_z",
+    "min_x","min_y","min_z",
+    "norm_x","norm_y","norm_z",
+    "q25_x","q25_y","q25_z",
+    "q50_x","q50_y","q50_z",
+    "q75_x","q75_y","q75_z",
+    "skewness_x","skewness_y","skewness_z",
+    "kurtosis_x","kurtosis_y","kurtosis_z",
+    "cov_x_y","cov_x_z","cov_y_z",
+    "cor_x_y","cor_x_z","cor_y_z",
+    "mean_diff_x_y","mean_diff_x_z","mean_diff_y_z",
+    "sd_diff_x_y","sd_diff_x_z","sd_diff_y_z",
+    "mean_amplitude_x","mean_amplitude_y","mean_amplitude_z"
   )
   all_num_cols <- if (advanced) c(basic_cols, adv_cols) else basic_cols
   for (col in all_num_cols) df[[col]] <- NA_real_
@@ -227,12 +227,12 @@ analyze_acc <- function(df,
   stat_mat[,"acc_burst_n"]      <- bn
   stat_mat[,"acc_freq_hz"]      <- freq_vec
   stat_mat[,"acc_duration_sec"] <- round(dur_vec,2)
-  stat_mat[,"acc_x_mean"]       <- round(xm, 3)
-  stat_mat[,"acc_x_sd"]         <- round(xsd,3)
-  stat_mat[,"acc_y_mean"]       <- round(ym, 3)
-  stat_mat[,"acc_y_sd"]         <- round(ysd,3)
-  stat_mat[,"acc_z_mean"]       <- round(zm, 3)
-  stat_mat[,"acc_z_sd"]         <- round(zsd,3)
+  stat_mat[,"mean_x"]           <- round(xm, 3)
+  stat_mat[,"sd_x"]             <- round(xsd,3)
+  stat_mat[,"mean_y"]           <- round(ym, 3)
+  stat_mat[,"sd_y"]             <- round(ysd,3)
+  stat_mat[,"mean_z"]           <- round(zm, 3)
+  stat_mat[,"sd_z"]             <- round(zsd,3)
   stat_mat[,"acc_odba"]         <- round(odba,3)
   type_vec <- boundaries$type
 
@@ -258,10 +258,12 @@ analyze_acc <- function(df,
         round(moments::skewness(az2),3),
         round(moments::kurtosis(ax2),3),round(moments::kurtosis(ay2),3),
         round(moments::kurtosis(az2),3),
-        round(stats::cov(ax2,ay2),3),round(stats::cov(ax2,az2),3),
-        round(stats::cov(ay2,az2),3),
-        round(stats::cor(ax2,ay2),3),round(stats::cor(ax2,az2),3),
-        round(stats::cor(ay2,az2),3),
+        round(suppressWarnings(stats::cov(ax2,ay2)),3),
+        round(suppressWarnings(stats::cov(ax2,az2)),3),
+        round(suppressWarnings(stats::cov(ay2,az2)),3),
+        round(suppressWarnings(stats::cor(ax2,ay2)),3),
+        round(suppressWarnings(stats::cor(ax2,az2)),3),
+        round(suppressWarnings(stats::cor(ay2,az2)),3),
         round(mean(ax2-ay2),3),round(mean(ax2-az2),3),round(mean(ay2-az2),3),
         round(stats::sd(ax2-ay2),3),round(stats::sd(ax2-az2),3),
         round(stats::sd(ay2-az2),3),
