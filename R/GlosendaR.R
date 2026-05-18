@@ -116,6 +116,7 @@ glosendas_list_devices <- function(username, password,
   login_result <- .gl_login(username, password, verbose = TRUE)
   registry     <- .gl_discover(login_result$h, login_result$page_txt,
                                 filter_word, tag_numbers, verbose = TRUE)
+  if (is.null(registry)) return(invisible(NULL))
   df <- data.frame(
     sn   = names(registry),
     name = sapply(registry, function(x) x[["name"]]),
@@ -194,9 +195,12 @@ glosendas_list_devices <- function(username, password,
               paste(missing, collapse = ", "), call. = FALSE)
     sns <- sns[keep]; nms <- nms[keep]; imeis <- imeis[keep]
   }
-  if (length(sns) == 0)
-    stop("No devices matched the given filters. (",
-         nrow(m), " total on portal.)")
+  if (length(sns) == 0) {
+    if (verbose)
+      message("No devices matched the given filters. (",
+              nrow(m), " total on portal.) Returning NULL.")
+    return(invisible(NULL))
+  }
 
   registry <- list()
   for (i in seq_along(sns)) {
