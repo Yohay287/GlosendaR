@@ -271,13 +271,15 @@ df     <- glosendas_download("myuser", "mypass", filter_word = "Houbara")
 gps_df <- analyze_acc(df)
 ```
 
-**How GPS fixes are matched to ACC bursts (two rules):**
+**How GPS fixes are matched to ACC bursts:**
 
-- **Rule 1 — time window** (`gps_window_sec`, default 10 s): the GPS fix is within this many seconds *before* the burst start. A small negative tolerance (−10 s) is also applied to handle cases where the GPS and ACC are triggered simultaneously but the GPS precise timestamp is fractionally later due to acquisition lag.
+A GPS fix is assigned to a burst when **both** conditions are met:
+1. The GPS row is **exactly one row before** `ACC_START`
+2. The GPS timestamp is within **`adj_gps_max_min` minutes** (default: 2 min) before **or** after the burst start time
 
-- **Rule 2 — adjacent row** (`adj_gps_max_min`, default 5 min): the GPS fix is *exactly one row before* `ACC_START`, and its timestamp is within this many minutes *before or after* the burst start time. This catches bursts where the tag records a GPS fix immediately before the burst with a longer gap than `gps_window_sec`.
+A small negative time gap is valid and expected — when GPS and ACC are triggered simultaneously, the GPS precise timestamp can be fractionally later than the burst start due to device acquisition lag.
 
-If neither rule matches, the burst is recorded as an `ACC_SUMMARY` row with no GPS coordinates.
+If no GPS fix matches, the burst is recorded as an `ACC_SUMMARY` row with no GPS coordinates.
 
 **`gps_to_burst_sec` column** — the signed time gap in seconds between the GPS fix and the burst start:
 - **Positive** — GPS fix is before the burst (normal, e.g. `5.2` = 5.2 s before)
@@ -310,11 +312,8 @@ GPS rows with ACC stats attached are labelled `GPS_ACC` in the `datatype` column
 # Default: GPS rows only, ACC stats attached, raw ACC rows removed
 gps_df <- analyze_acc(df)
 
-# Wider Rule 1 window (default 10 seconds)
-gps_df <- analyze_acc(df, gps_window_sec = 30)
-
-# Wider Rule 2 threshold (default 5 minutes)
-gps_df <- analyze_acc(df, adj_gps_max_min = 15)
+# Wider matching threshold (default 2 minutes)
+gps_df <- analyze_acc(df, adj_gps_max_min = 10)
 
 # Keep all original rows (raw ACC rows retained)
 full_df <- analyze_acc(df, include_burst_rows = TRUE)
@@ -323,12 +322,11 @@ full_df <- analyze_acc(df, include_burst_rows = TRUE)
 gps_df <- analyze_acc(df, advanced = TRUE)
 ```
 
-**GPS–ACC matching parameters:**
+**GPS–ACC matching parameter:**
 
-| Parameter | Rule | Description | Default |
-|-----------|------|-------------|---------|
-| `gps_window_sec` | Rule 1 | Max seconds the GPS fix can precede the burst start | `10` |
-| `adj_gps_max_min` | Rule 2 | Max minutes between GPS fix and burst start when GPS is exactly one row before `ACC_START` (before **or** after) | `5` |
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `adj_gps_max_min` | Max minutes the GPS fix can be before **or** after the burst start time (GPS must be exactly one row before `ACC_START`) | `2` |
 
 **`gps_to_burst_sec` column:**
 - **Positive** — GPS fix is before the burst (normal case, e.g. `5.2` = 5.2 s before)
