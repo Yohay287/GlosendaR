@@ -9,8 +9,14 @@ Description: Provides a simple interface to authenticate with the Glosendas
     species or any keyword, all available data formats (GPS, sensors, V1/V2), 
     custom date ranges, and returns a tidy data frame ready for analysis.
     Includes functions for GPS burst detection and collapsing, and 
-    accelerometer burst analysis. When saving CSV output, the specified 
-    output folder is created automatically if it does not already exist.
+    accelerometer (ACC) burst analysis. ACC bursts are matched to their 
+    preceding GPS fix using two rules: (1) the GPS fix falls within a 
+    user-defined time window before the burst start; (2) the GPS fix is 
+    exactly one row before the ACC start and within a user-defined minute 
+    threshold (before or after the burst start time). The time gap between 
+    each GPS fix and its assigned ACC burst is recorded in a dedicated column. 
+    When saving CSV output, the specified output folder is created 
+    automatically if it does not already exist.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

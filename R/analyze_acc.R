@@ -7,8 +7,13 @@
 #' large datasets.
 #'
 #' @param df Data frame from \code{glosendas_download()}.
-#' @param gps_window_sec Numeric. Max seconds between GPS fix and burst start.
-#'   Default: \code{10}.
+#' @param gps_window_sec Numeric. Max seconds between GPS fix and burst start
+#'   for the standard window-based matching rule. Default: \code{10}.
+#' @param adj_gps_max_min Numeric. For Rule 2 (adjacent-row matching): if the GPS
+#'   fix is exactly one row before the ACC_START, it is assigned when the GPS
+#'   timestamp is within this many minutes before OR after the burst start time.
+#'   The \code{gps_to_burst_sec} column records the exact time gap in seconds.
+#'   Default: \code{5}.
 #' @param include_burst_rows Logical. Keep raw ACC rows. Default: \code{FALSE}.
 #' @param advanced Logical. Compute extended metrics. Requires \pkg{moments}.
 #'   Default: \code{FALSE}.
@@ -28,16 +33,18 @@
 #'
 #' @export
 analyze_acc <- function(df,
-                        gps_window_sec     = 10,
-                        include_burst_rows = FALSE,
-                        advanced           = FALSE,
-                        v1_burst_gap_sec   = 5,
-                        verbose            = TRUE) {
+                        gps_window_sec        = 10,
+                        adj_gps_max_min    = 5,
+                        include_burst_rows    = FALSE,
+                        advanced              = FALSE,
+                        v1_burst_gap_sec      = 5,
+                        verbose               = TRUE) {
 
   # ── guards ───────────────────────────────────────────────────────────────────
   if (!is.data.frame(df))        stop("`df` must be a data frame.")
   if (nrow(df) == 0)             stop("`df` has zero rows.")
   if (gps_window_sec < 0)        stop("`gps_window_sec` must be >= 0.")
+  if (adj_gps_max_min < 0)    stop("`adj_gps_max_min` must be >= 0.")
   if (v1_burst_gap_sec < 0)      stop("`v1_burst_gap_sec` must be >= 0.")
   miss <- setdiff(c("datatype","acc_x","acc_y","acc_z"), names(df))
   if (length(miss)) stop("Missing columns: ", paste(miss, collapse=", "))
@@ -160,20 +167,23 @@ analyze_acc <- function(df,
   in_window  <- has_prev & !is.na(time_diff) &
                 time_diff >= -10 & time_diff <= gps_window_sec
 
-  # Rule 2: GPS fix is EXACTLY one row before the ACC_START AND within 5 minutes.
-  # Covers cases where the tag records a single GPS fix immediately before a burst
-  # with no other rows in between. The GPS timestamp can be up to 10 seconds AFTER
-  # the burst start (time_diff >= -10) — the device records GPS and ACC simultaneously
-  # but the GPS precise timestamp can lag by ~1 second due to acquisition timing.
-  prev_row_is_gps <- has_prev & (gps_idx[pmax(fi,1L)] == boundaries$s - 1L)
-  within_5min     <- has_prev & !is.na(time_diff) & time_diff <= 300 & time_diff >= -10
-  rule2           <- prev_row_is_gps & within_5min & !in_window
+  # Rule 2: GPS fix is EXACTLY one row before the ACC_START AND within
+  # adj_gps_max_min minutes (before or after the burst start).
+  # The GPS timestamp can be slightly after the burst start due to acquisition
+  # timing on the device — a tolerance of 10 seconds is applied on the "after" side.
+  adj_gps_max_sec <- adj_gps_max_min * 60
+  prev_row_is_gps    <- has_prev & (gps_idx[pmax(fi,1L)] == boundaries$s - 1L)
+  within_adj_window  <- has_prev & !is.na(time_diff) &
+                        time_diff <= adj_gps_max_sec & time_diff >= -10
+  rule2              <- prev_row_is_gps & within_adj_window & !in_window
 
   matched       <- in_window | rule2
   target_gps    <- ifelse(matched, gps_idx[pmax(fi,1L)], NA_integer_)
 
-  # Time difference column: GPS precise time - burst start precise time (seconds)
-  # Positive = GPS is before burst; negative = GPS is fractionally after burst start
+  # gps_to_burst_sec: signed difference in seconds (burst_start_time - GPS_time).
+  # Positive = GPS fix is BEFORE the burst start (normal case).
+  # Negative = GPS fix timestamp is fractionally AFTER burst start (same-second acquisition).
+  # NA = no GPS fix assigned (orphan burst).
   gps_to_burst_sec <- ifelse(matched,
                               round(time_diff, 2),
                               NA_real_)
@@ -338,8 +348,10 @@ analyze_acc <- function(df,
     if(n_trunc>0L) message(sprintf("  Truncated bursts     : %d", n_trunc))
     n_rule1 <- sum(in_window,  na.rm=TRUE)
     n_rule2 <- sum(rule2,      na.rm=TRUE)
-    message(sprintf("  Attached (window)    : %d", n_rule1))
-    message(sprintf("  Attached (prev row)  : %d", n_rule2))
+    message(sprintf("  GPS window (Rule 1)  : within %g sec before burst", gps_window_sec))
+    message(sprintf("  Adj GPS (Rule 2)     : prev row, within +/- %g min", adj_gps_max_min))
+    message(sprintf("  Attached (Rule 1)    : %d", n_rule1))
+    message(sprintf("  Attached (Rule 2)    : %d", n_rule2))
     message(sprintf("  Total attached       : %d", n_attached))
     message(sprintf("  New ACC_SUMMARY rows : %d", n_new_row))
     message(sprintf("  Output rows          : %d", nrow(out)))
