@@ -12,10 +12,16 @@ Description: Provides a simple interface to authenticate with the Glosendas
     accelerometer (ACC) burst analysis. A GPS fix is assigned to an ACC burst 
     when it is exactly one row before the burst start and within a 
     user-defined minute threshold (default: 2 minutes) before or after the 
-    burst start time. The signed time gap between each GPS fix and its 
-    assigned burst is recorded in a dedicated output column. When saving CSV 
-    output, the specified output folder is created automatically if it does 
-    not already exist.
+    burst start time. Basic output columns include mean_x/y/z, sd_x/y/z, 
+    acc_odba, acc_burst_n, acc_freq_hz, and acc_duration_sec. Advanced mode 
+    adds range, min, max, norm, percentiles, skewness, kurtosis, covariance, 
+    correlation, axis differences, and mean amplitude per axis. The signed 
+    time gap between each GPS fix and its assigned burst is recorded in 
+    gps_to_burst_sec. Date-time inputs (from_dt, to_dt) are automatically 
+    converted to UTC — strings with embedded timezone labels such as 
+    "2023-03-06 18:47 IST" or POSIXct objects in any timezone are accepted 
+    and converted correctly. When saving CSV output, the specified output 
+    folder is created automatically if it does not already exist.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)

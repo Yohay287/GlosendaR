@@ -241,6 +241,7 @@ df |>
 - Credentials are passed directly to the portal and are never stored by the package.
 - `drop_empty_cols = TRUE` (default) removes columns where every value is `NA` (e.g. `depth_m`, `conductivity_mS/cm`) — set to `FALSE` to keep all portal columns.
 - When `save_csv = TRUE`, the `output_dir` folder is created automatically if it does not already exist.
+- `from_dt` and `to_dt` are always sent to the portal in UTC. If you pass a string with a timezone label (e.g. `"2023-03-06 18:47 IST"`) or a `POSIXct` object in any timezone, it is automatically converted to UTC. Plain strings without a timezone label (e.g. `"2023-03-06 18:47"`) are treated as UTC directly.
 - The portal uses per-device session tokens; the package handles these automatically.
 - Devices with no data in the requested date range are reported in the preview but do not cause errors.
 - `tag_numbers` accepts both character (`"216417"`) and numeric (`216417`) vectors.
@@ -281,32 +282,42 @@ A small negative time gap is valid and expected — when GPS and ACC are trigger
 
 If no GPS fix matches, the burst is recorded as an `ACC_SUMMARY` row with no GPS coordinates.
 
-**`gps_to_burst_sec` column** — the signed time gap in seconds between the GPS fix and the burst start:
-- **Positive** — GPS fix is before the burst (normal, e.g. `5.2` = 5.2 s before)
-- **Negative** — GPS timestamp is fractionally after burst start (same-second acquisition lag, e.g. `-0.9`)
-- **`NA`** — no GPS fix was assigned (orphan burst)
-
-GPS rows with ACC stats attached are labelled `GPS_ACC` in the `datatype` column.
-
 **What it does:**
 - Detects all ACC bursts automatically (any frequency — 5 Hz, 10 Hz, 20 Hz, 50 Hz, or other)
 - Includes both START and END rows in calculations (they contain valid readings)
 - Uses `UTC_date` + `UTC_time` + `milliseconds` for sub-second duration accuracy
-- If no GPS fix is found under either rule, inserts a new `ACC_SUMMARY` row instead
+- GPS rows with ACC stats attached are labelled `GPS_ACC` in the `datatype` column
 - Handles truncated bursts (no END marker) gracefully
 
-**New columns added to the GPS row:**
+**Basic columns added (always):**
 
 | Column | Description |
 |--------|-------------|
 | `acc_burst_n` | Number of ACC readings in the burst |
 | `acc_freq_hz` | Sampling frequency (Hz) |
 | `acc_duration_sec` | Burst duration in seconds |
-| `acc_x_mean` / `acc_x_sd` | Mean and SD of X axis |
-| `acc_y_mean` / `acc_y_sd` | Mean and SD of Y axis |
-| `acc_z_mean` / `acc_z_sd` | Mean and SD of Z axis |
+| `mean_x` / `sd_x` | Mean and SD — X axis |
+| `mean_y` / `sd_y` | Mean and SD — Y axis |
+| `mean_z` / `sd_z` | Mean and SD — Z axis |
 | `acc_odba` | Overall Dynamic Body Acceleration |
-| `acc_burst_type` | Burst type string (e.g. `SEN_ACC_10Hz`) |
+| `acc_burst_type` | Burst type string (e.g. `"SEN_ACC_10Hz"`) |
+| `gps_to_burst_sec` | Signed time gap (seconds) between GPS fix and burst start (positive = GPS before burst, negative = acquisition lag, NA = no GPS assigned) |
+
+**Advanced columns added (`advanced = TRUE`):**
+
+| Columns | Description |
+|---------|-------------|
+| `range_x/y/z` | Value range per axis |
+| `max_x/y/z`, `min_x/y/z` | Max and min per axis |
+| `norm_x/y/z` | L2-norm per axis |
+| `q25_x/y/z`, `q50_x/y/z`, `q75_x/y/z` | 25th, 50th, 75th percentile per axis |
+| `skewness_x/y/z` | Skewness per axis |
+| `kurtosis_x/y/z` | Kurtosis per axis |
+| `cov_x_y`, `cov_x_z`, `cov_y_z` | Covariance between axis pairs |
+| `cor_x_y`, `cor_x_z`, `cor_y_z` | Correlation between axis pairs |
+| `mean_diff_x_y/x_z/y_z` | Mean of axis differences |
+| `sd_diff_x_y/x_z/y_z` | SD of axis differences |
+| `mean_amplitude_x/y/z` | Mean absolute amplitude of successive differences |
 
 ```r
 # Default: GPS rows only, ACC stats attached, raw ACC rows removed
@@ -318,7 +329,7 @@ gps_df <- analyze_acc(df, adj_gps_max_min = 10)
 # Keep all original rows (raw ACC rows retained)
 full_df <- analyze_acc(df, include_burst_rows = TRUE)
 
-# Advanced metrics
+# Advanced metrics (requires: install.packages("moments"))
 gps_df <- analyze_acc(df, advanced = TRUE)
 ```
 
@@ -328,7 +339,4 @@ gps_df <- analyze_acc(df, advanced = TRUE)
 |-----------|-------------|---------|
 | `adj_gps_max_min` | Max minutes the GPS fix can be before **or** after the burst start time (GPS must be exactly one row before `ACC_START`) | `2` |
 
-**`gps_to_burst_sec` column:**
-- **Positive** — GPS fix is before the burst (normal case, e.g. `5.2` = 5.2 s before)
-- **Negative** — GPS timestamp is fractionally after burst start (same-second acquisition lag, e.g. `-0.9`)
-- **`NA`** — no GPS fix was assigned (orphan burst)
+

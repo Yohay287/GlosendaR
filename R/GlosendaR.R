@@ -31,10 +31,12 @@
 #'   name. Use \code{""} to download all devices. Default: \code{""}.
 #' @param tag_numbers Character or numeric vector of specific tag S/N numbers
 #'   to download. \code{NULL} means no S/N filter. Default: \code{NULL}.
-#' @param from_dt Character. Start of date range, UTC, \code{"YYYY-MM-DD HH:MM"}.
-#'   Default: 7 days ago.
-#' @param to_dt Character. End of date range, UTC, \code{"YYYY-MM-DD HH:MM"}.
-#'   Default: now.
+#' @param from_dt Character. Start of date range in UTC, format
+#'   \code{"YYYY-MM-DD HH:MM"}. The portal requires UTC — the default
+#'   value is automatically computed in UTC regardless of the local system
+#'   timezone. Default: 7 days ago at midnight UTC.
+#' @param to_dt Character. End of date range in UTC, format
+#'   \code{"YYYY-MM-DD HH:MM"}. Default: current time in UTC.
 #' @param format_code Integer \code{0}–\code{5}:
 #'   \code{0} GPS+SENSORS, \code{1} GPS, \code{2} SENSORS,
 #'   \code{3} GPS+SENSORS_V2 (default), \code{4} GPS_V2, \code{5} SENSORS_V2.
@@ -60,10 +62,10 @@ glosendas_download <- function(username,
                                password,
                                filter_word     = "",
                                tag_numbers     = NULL,
-                               from_dt         = format(Sys.time() - 7 * 86400,
-                                                        "%Y-%m-%d 00:00"),
-                               to_dt           = format(Sys.time(),
-                                                        "%Y-%m-%d %H:%M"),
+                               from_dt         = format(as.POSIXct(Sys.time(), tz = "UTC") - 7 * 86400,
+                                                        "%Y-%m-%d 00:00", tz = "UTC"),
+                               to_dt           = format(as.POSIXct(Sys.time(), tz = "UTC"),
+                                                        "%Y-%m-%d %H:%M", tz = "UTC"),
                                format_code     = 3,
                                save_csv        = FALSE,
                                output_dir      = "glosendas_data",
@@ -77,6 +79,12 @@ glosendas_download <- function(username,
                        .glosendas_env$FORMAT_LABELS), collapse = "\n"))
 
   if (!is.null(tag_numbers)) tag_numbers <- as.character(tag_numbers)
+
+  # Normalise from_dt and to_dt to UTC "YYYY-MM-DD HH:MM" format.
+  # If the string contains a timezone (e.g. "2023-03-06 18:47:51 IST"),
+  # it is parsed respecting that timezone and converted to UTC.
+  from_dt <- .gl_to_utc(from_dt)
+  to_dt   <- .gl_to_utc(to_dt)
 
   login_result <- .gl_login(username, password, verbose)
   h        <- login_result$h
@@ -130,6 +138,44 @@ glosendas_list_devices <- function(username, password,
 # ==============================================================================
 # INTERNAL HELPERS
 # ==============================================================================
+
+
+#' @noRd
+#' Convert a datetime string or POSIXct to UTC "YYYY-MM-DD HH:MM" string.
+#' Handles strings with embedded timezone labels (e.g. "2023-03-06 18:47 IST").
+.gl_to_utc <- function(dt_str) {
+  if (inherits(dt_str, "POSIXct")) {
+    return(format(as.POSIXct(as.numeric(dt_str), origin="1970-01-01", tz="UTC"),
+                  "%Y-%m-%d %H:%M"))
+  }
+  dt_str <- trimws(as.character(dt_str))
+
+  # Already in plain "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS" — no tz label
+  if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?$",
+            dt_str)) {
+    # Treat as-is (user is responsible for passing UTC)
+    return(substr(dt_str, 1, 16))
+  }
+
+  # Contains a timezone label — parse with lubridate if available, else base R
+  parsed <- tryCatch({
+    # Try parsing with an explicit tz abbreviation at the end
+    # e.g. "2023-03-06 18:47:51 IST" or "2023-03-06 18:47:51 IDT"
+    # base R as.POSIXct can handle this on most systems
+    p <- as.POSIXct(dt_str, tz = "")   # let R detect tz from the string
+    if (is.na(p)) stop("parse failed")
+    p
+  }, error = function(e) {
+    # Fallback: strip the tz label and warn
+    stripped <- sub("\\s+[A-Z]{2,5}$", "", dt_str)
+    warning("Could not parse timezone in '", dt_str,
+            "' — treating as local time and converting to UTC.", call. = FALSE)
+    as.POSIXct(stripped, tz = Sys.timezone())
+  })
+
+  format(as.POSIXct(as.numeric(parsed), origin="1970-01-01", tz="UTC"),
+         "%Y-%m-%d %H:%M")
+}
 
 #' @noRd
 .gl_login <- function(username, password, verbose = TRUE) {
@@ -306,8 +352,8 @@ glosendas_list_devices <- function(username, password,
 
   if (verbose) {
     message("\nDownloading ", format_label, " data ...")
-    message("  From    : ", from_dt)
-    message("  To      : ", to_dt)
+    message("  From    : ", from_dt, " (UTC)")
+    message("  To      : ", to_dt, " (UTC)")
     message("  Devices : ", length(sns))
     message("")
   }
