@@ -83,8 +83,10 @@ glosendas_download <- function(username,
   # Normalise from_dt and to_dt to UTC "YYYY-MM-DD HH:MM" format.
   # If the string contains a timezone (e.g. "2023-03-06 18:47:51 IST"),
   # it is parsed respecting that timezone and converted to UTC.
-  from_dt <- .gl_to_utc(from_dt)
-  to_dt   <- .gl_to_utc(to_dt)
+  # from_dt: truncate to minute (never go earlier than requested)
+  # to_dt:   round UP to next minute so no data at the end of the window is missed
+  from_dt <- .gl_to_utc(from_dt, round_up = FALSE)
+  to_dt   <- .gl_to_utc(to_dt,   round_up = TRUE)
 
   login_result <- .gl_login(username, password, verbose)
   h        <- login_result$h
@@ -142,38 +144,48 @@ glosendas_list_devices <- function(username, password,
 
 #' @noRd
 #' Convert a datetime string or POSIXct to UTC "YYYY-MM-DD HH:MM" string.
-#' Handles strings with embedded timezone labels (e.g. "2023-03-06 18:47 IST").
-.gl_to_utc <- function(dt_str) {
+#' Handles strings with embedded timezone labels (e.g. "2023-03-06 18:47:51 IST").
+#' round_up = TRUE rounds seconds UP to the next minute (use for to_dt so no
+#' data at the end of the window is missed due to second truncation).
+.gl_to_utc <- function(dt_str, round_up = FALSE) {
   if (inherits(dt_str, "POSIXct")) {
-    return(format(as.POSIXct(as.numeric(dt_str), origin="1970-01-01", tz="UTC"),
+    secs <- as.numeric(dt_str)
+    if (round_up && (secs %% 60) > 0) secs <- secs + (60 - secs %% 60)
+    return(format(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"),
                   "%Y-%m-%d %H:%M"))
   }
   dt_str <- trimws(as.character(dt_str))
 
-  # Already in plain "YYYY-MM-DD HH:MM" or "YYYY-MM-DD HH:MM:SS" — no tz label
-  if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}(:[0-9]{2})?$",
-            dt_str)) {
-    # Treat as-is (user is responsible for passing UTC)
-    return(substr(dt_str, 1, 16))
+  # Already in plain "YYYY-MM-DD HH:MM" — no seconds, no tz label
+  if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}$", dt_str)) {
+    return(dt_str)
   }
 
-  # Contains a timezone label — parse with lubridate if available, else base R
+  # Plain "YYYY-MM-DD HH:MM:SS" — has seconds but no tz label, treat as UTC
+  if (grepl("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}$",
+            dt_str)) {
+    parsed <- as.POSIXct(dt_str, tz = "UTC")
+    secs   <- as.numeric(parsed)
+    if (round_up && (secs %% 60) > 0) secs <- secs + (60 - secs %% 60)
+    return(format(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"),
+                  "%Y-%m-%d %H:%M"))
+  }
+
+  # Contains a timezone label (e.g. "2023-03-06 18:47:51 IST")
   parsed <- tryCatch({
-    # Try parsing with an explicit tz abbreviation at the end
-    # e.g. "2023-03-06 18:47:51 IST" or "2023-03-06 18:47:51 IDT"
-    # base R as.POSIXct can handle this on most systems
-    p <- as.POSIXct(dt_str, tz = "")   # let R detect tz from the string
+    p <- as.POSIXct(dt_str, tz = "")
     if (is.na(p)) stop("parse failed")
     p
   }, error = function(e) {
-    # Fallback: strip the tz label and warn
     stripped <- sub("\\s+[A-Z]{2,5}$", "", dt_str)
     warning("Could not parse timezone in '", dt_str,
             "' — treating as local time and converting to UTC.", call. = FALSE)
     as.POSIXct(stripped, tz = Sys.timezone())
   })
 
-  format(as.POSIXct(as.numeric(parsed), origin="1970-01-01", tz="UTC"),
+  secs <- as.numeric(parsed)
+  if (round_up && (secs %% 60) > 0) secs <- secs + (60 - secs %% 60)
+  format(as.POSIXct(secs, origin = "1970-01-01", tz = "UTC"),
          "%Y-%m-%d %H:%M")
 }
 
