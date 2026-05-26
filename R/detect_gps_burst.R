@@ -100,6 +100,9 @@ detect_gps_burst <- function(df,
   if (length(miss))
     stop("Missing required columns: ", paste(miss, collapse = ", "))
 
+  # Coerce data.table / tibble to plain data.frame so subsetting behaves correctly
+  if (!identical(class(df), "data.frame")) df <- as.data.frame(df)
+
   # ── filter GPS rows ───────────────────────────────────────────────────────────
   is_gps <- !is.na(df$datatype) & trimws(df$datatype) == "GPS"
   if (!any(is_gps)) {
@@ -206,13 +209,13 @@ detect_gps_burst <- function(df,
   # ── excluded sequences: one row per unique length, row_starts as string ───────
   excl_sizes <- as.integer(names(len_table[as.integer(names(len_table)) > 1L &
                                              len_table < min_sequences]))
-  if (length(excl_sizes) > 0L) {
+  if (length(excl_sizes) > 0L && length(gps_idx) > 0L) {
     excl_list <- lapply(excl_sizes, function(sz) {
       run_idx       <- which(run_vals & run_lens == (sz - 1L))
       gps_start_pos <- run_starts[run_idx]
       gps_end_pos   <- run_ends[run_idx] + 1L
-      row_start     <- gps_idx[gps_start_pos]
-      row_end       <- gps_idx[pmin(gps_end_pos, length(gps_idx))]
+      row_start     <- gps_idx[pmin(gps_start_pos, length(gps_idx))]
+      row_end       <- gps_idx[pmin(gps_end_pos,   length(gps_idx))]
       likely        <- if (sz > dom_size * 3L) "flight / long event" else "noise / edge"
       data.frame(
         length     = sz,

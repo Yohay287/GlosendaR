@@ -53,6 +53,9 @@ collapse_gps_burst <- function(df,
   # ── guards ───────────────────────────────────────────────────────────────────
   if (!is.data.frame(df))
     stop("`df` must be a data frame.")
+
+  # Coerce data.table / tibble to plain data.frame
+  if (!identical(class(df), "data.frame")) df <- as.data.frame(df)
   if (nrow(df) == 0)
     stop("`df` has zero rows.")
   # burst_size can be a vector (e.g. from detect_gps_burst()$collapse_sizes)

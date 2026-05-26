@@ -40,6 +40,9 @@ analyze_acc <- function(df,
 
   # ── guards ───────────────────────────────────────────────────────────────────
   if (!is.data.frame(df))        stop("`df` must be a data frame.")
+
+  # Coerce data.table / tibble to plain data.frame
+  if (!identical(class(df), "data.frame")) df <- as.data.frame(df)
   if (nrow(df) == 0)             stop("`df` has zero rows.")
   if (adj_gps_max_min < 0)    stop("`adj_gps_max_min` must be >= 0.")
   if (v1_burst_gap_sec < 0)      stop("`v1_burst_gap_sec` must be >= 0.")

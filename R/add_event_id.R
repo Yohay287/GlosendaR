@@ -69,6 +69,9 @@ add_event_id <- function(df,
   # ── guards ────────────────────────────────────────────────────────────────
   if (!inherits(df, "data.frame")) stop("`df` must be a data frame.")
   df <- as.data.frame(df)
+
+  # Coerce data.table / tibble to plain data.frame
+  if (!identical(class(df), "data.frame")) df <- as.data.frame(df)
   if (nrow(df) == 0) stop("`df` has zero rows.")
   if (!is.numeric(max_gap_sec) || max_gap_sec < 0)
     stop("`max_gap_sec` must be a non-negative number.")
