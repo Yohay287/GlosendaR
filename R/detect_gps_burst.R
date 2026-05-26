@@ -110,7 +110,9 @@ detect_gps_burst <- function(df,
     return(invisible(NULL))
   }
 
-  gps_df <- df[is_gps, , drop = FALSE]
+  # gps_idx maps GPS-position (1..n_gps) to original df row number
+  gps_idx <- which(is_gps)
+  gps_df  <- df[is_gps, , drop = FALSE]
 
   # ── parse datetime ────────────────────────────────────────────────────────────
   dt <- .parse_dt_multi(gps_df$UTC_datetime)
@@ -290,9 +292,8 @@ detect_gps_burst <- function(df,
       message("  ", strrep("-", 55))
     }
 
-    if (length(excl) > 0) {
+    if (nrow(excl_df) > 0L) {
       message("")
-      if (nrow(excl_df) > 0L) {
         message(sprintf("  --- Excluded (appear < %d times) ---", min_sequences))
         message(sprintf("  %-8s  %6s  %-21s  %s",
                         "length", "count", "likely", "row_starts"))
@@ -305,7 +306,6 @@ detect_gps_burst <- function(df,
         message("  ", strrep("-", 70))
         message("  Full table (incl. row_ends): result$excluded")
       }
-    }
 
     message("")
     message("  --- Ready to Use ---")
