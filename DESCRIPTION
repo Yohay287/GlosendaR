@@ -8,7 +8,7 @@ Description: Provides a simple interface to authenticate with the Glosendas
     download GPS and sensor data for tagged animals. Supports filtering by 
     species or any keyword, all available data formats (GPS, sensors, V1/V2), 
     custom date ranges, and returns a tidy data frame ready for analysis.
-    Includes functions for GPS burst detection and collapsing, and 
+    Includes functions for GPS burst detection and collapsing, event identification (add_event_id), and 
     accelerometer (ACC) burst analysis. A GPS fix is assigned to an ACC burst 
     when it is exactly one row before the burst start and within a 
     user-defined minute threshold (default: 2 minutes) before or after the 

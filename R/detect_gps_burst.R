@@ -203,6 +203,34 @@ detect_gps_burst <- function(df,
     dom_size
 
   # ── result list ───────────────────────────────────────────────────────────────
+  # ── excluded sequences: one row per unique length, row_starts as string ───────
+  excl_sizes <- as.integer(names(len_table[as.integer(names(len_table)) > 1L &
+                                             len_table < min_sequences]))
+  if (length(excl_sizes) > 0L) {
+    excl_list <- lapply(excl_sizes, function(sz) {
+      run_idx       <- which(run_vals & run_lens == (sz - 1L))
+      gps_start_pos <- run_starts[run_idx]
+      gps_end_pos   <- run_ends[run_idx] + 1L
+      row_start     <- gps_idx[gps_start_pos]
+      row_end       <- gps_idx[pmin(gps_end_pos, length(gps_idx))]
+      likely        <- if (sz > dom_size * 3L) "flight / long event" else "noise / edge"
+      data.frame(
+        length     = sz,
+        count      = length(run_idx),
+        likely     = likely,
+        row_starts = paste(row_start, collapse = ", "),
+        row_ends   = paste(row_end,   collapse = ", "),
+        stringsAsFactors = FALSE
+      )
+    })
+    excl_df <- do.call(rbind, excl_list)
+    rownames(excl_df) <- NULL
+  } else {
+    excl_df <- data.frame(length=integer(), count=integer(), likely=character(),
+                          row_starts=character(), row_ends=character(),
+                          stringsAsFactors=FALSE)
+  }
+
   result <- list(
     burst_size        = dom_size,
     n_bursts          = dom_count,
@@ -212,6 +240,7 @@ detect_gps_burst <- function(df,
     include_truncated = include_truncated,
     all_candidates    = cand_df,
     all_run_lengths   = as.data.frame(len_table),
+    excluded          = excl_df,
     total_gps_fixes   = n_gps
   )
 
@@ -258,17 +287,20 @@ detect_gps_burst <- function(df,
       message("  ", strrep("-", 55))
     }
 
-    excl <- len_table[as.integer(names(len_table)) > 1L &
-                        len_table < min_sequences]
     if (length(excl) > 0) {
       message("")
-      message(sprintf("  --- Excluded (appear < %d times) ---", min_sequences))
-      message(sprintf("  %-12s  %8s  %s", "length", "count", "likely"))
-      message("  ", strrep("-", 42))
-      for (nm in names(excl)) {
-        likely <- if (as.integer(nm) > dom_size * 3L)
-          "flight / long event" else "noise / edge"
-        message(sprintf("  %-12s  %8d  %s", nm, excl[[nm]], likely))
+      if (nrow(excl_df) > 0L) {
+        message(sprintf("  --- Excluded (appear < %d times) ---", min_sequences))
+        message(sprintf("  %-8s  %6s  %-21s  %s",
+                        "length", "count", "likely", "row_starts"))
+        message("  ", strrep("-", 70))
+        for (i in seq_len(nrow(excl_df))) {
+          r <- excl_df[i, ]
+          message(sprintf("  %-8d  %6d  %-21s  %s",
+                          r$length, r$count, r$likely, r$row_starts))
+        }
+        message("  ", strrep("-", 70))
+        message("  Full table (incl. row_ends): result$excluded")
       }
     }
 

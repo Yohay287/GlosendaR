@@ -214,6 +214,51 @@ gps_df <- analyze_acc(df_c)
 
 ---
 
+### `add_event_id()`
+
+Assigns a unique `Event_ID` to each event in the data frame. An event is a group of consecutive rows belonging to the same activity — a GPS fix (possibly a burst), an ACC burst, a flight sequence, or any other multi-row event.
+
+**Event_ID format:** `"<tag_name>_<UTC_timestamp_of_first_row>"`
+e.g. `"Houbara Kelach 2_2026-02-07 03:27:55"`
+
+```r
+# Add Event_ID column (default)
+df_ev <- add_event_id(df_acc)
+
+# Also add Event_count (number of rows per event)
+df_ev <- add_event_id(df_acc, add_event_count = TRUE)
+
+# Wider gap threshold
+df_ev <- add_event_id(df_acc, max_gap_sec = 60)
+```
+
+**Event boundary rules — a new event starts when:**
+1. Tag name changes
+2. Time gap from the previous row exceeds `max_gap_sec` (default: 30 s)
+3. A GPS/GPSF row appears after a non-GPS row (e.g. after `ACC_END`) — this always signals a new fix/event
+
+**Key behaviour:**
+- A GPS/GPSF burst immediately followed by an ACC burst = **one** event
+- `ACC_END` → `GPSF` = **two** events (the GPSF starts a new event)
+- `Event_count` (when enabled) is the same value on every row of the same event — useful for filtering by event size
+
+```r
+# Filter to a specific event
+one <- df_ev[df_ev$Event_ID == "Houbara Kelach 2_2026-02-07 03:27:55", ]
+
+# Filter to large events (e.g. flights > 60 rows)
+df_ev   <- add_event_id(df_acc, add_event_count = TRUE)
+flights <- df_ev[df_ev$Event_count > 60, ]
+```
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `max_gap_sec` | Max seconds between rows in the same event | `30` |
+| `add_event_count` | Add `Event_count` column | `FALSE` |
+
+
+---
+
 ## Working with the Data
 
 ```r
