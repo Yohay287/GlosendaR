@@ -82,19 +82,27 @@ add_event_id <- function(df,
     stop("Missing required columns: ", paste(missing, collapse = ", "))
 
   # ── parse timestamps ──────────────────────────────────────────────────────
-  # Prefer UTC_timestamp (sub-second precision) when available
-  if ("UTC_timestamp" %in% names(df) &&
-      !all(is.na(df$UTC_timestamp) | df$UTC_timestamp == "")) {
-    ts_raw <- df$UTC_timestamp
-  } else {
-    ts_raw <- df[[timestamp_col]]
+  # Prefer UTC_timestamp (sub-second precision) when available.
+  # Handle POSIXct, numeric (epoch seconds), and character formats robustly.
+  .to_posixct <- function(x) {
+    if (inherits(x, "POSIXct")) return(as.POSIXct(as.numeric(x),
+                                                    origin = "1970-01-01",
+                                                    tz = "UTC"))
+    if (is.numeric(x))          return(as.POSIXct(x, origin = "1970-01-01",
+                                                    tz = "UTC"))
+    suppressWarnings(as.POSIXct(as.character(x), tz = "UTC"))
   }
 
-  ts <- suppressWarnings(as.POSIXct(ts_raw, tz = "UTC"))
-  bad <- is.na(ts)
-  if (any(bad))
-    ts[bad] <- suppressWarnings(
-      as.POSIXct(df[[timestamp_col]][bad], tz = "UTC"))
+  if ("UTC_timestamp" %in% names(df)) {
+    ts_raw <- df$UTC_timestamp
+    ts     <- .to_posixct(ts_raw)
+    bad    <- is.na(ts)
+    if (any(bad))
+      ts[bad] <- .to_posixct(df[[timestamp_col]])[bad]
+  } else {
+    ts <- .to_posixct(df[[timestamp_col]])
+  }
+
   ts_num <- as.numeric(ts)
 
   # ── classify row types ────────────────────────────────────────────────────
