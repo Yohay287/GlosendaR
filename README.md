@@ -259,6 +259,46 @@ flights <- df_ev[df_ev$Event_count > 60, ]
 
 ---
 
+### `add_day_id()`
+
+Assigns a unique `Day_ID` to each row based on **sunrise/sunset at the GPS location**. Requires the `suncalc` package.
+
+**Day_ID format:** `"<tag_name>_<YYYYMMDD>"`
+e.g. `"Houbara Kelach 2_20260207"`
+
+A day runs from one sunrise (diurnal) or sunset (nocturnal) to the following one. The crossing time is found by a vectorised binary search to ~1 second precision. Run `add_event_id()` **before** `add_day_id()` so that ACC rows without coordinates inherit their `Day_ID` from the GPS row in the same event.
+
+```r
+# Recommended workflow
+df_acc <- analyze_acc(df)
+df_ev  <- add_event_id(df_acc)    # must come first
+df_day <- add_day_id(df_ev)       # diurnal, civil twilight (-6 deg)
+
+# Nocturnal animals
+df_day <- add_day_id(df_ev, type = "nocturnal")
+
+# Add sun angle and day progress columns
+df_day <- add_day_id(df_ev, add_sun_angle = TRUE, day_progress = TRUE)
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `type` | `"diurnal"` or `"nocturnal"` | `"diurnal"` |
+| `sun_angle` | Solar altitude (degrees) defining the day boundary | `-6` |
+| `add_sun_angle` | Add `sun_angle_deg` column (2 d.p.) | `FALSE` |
+| `day_progress` | Add `day_progress` column (0-200, 2 d.p.) | `FALSE` |
+
+**Common `sun_angle` values:** `0` = geometric horizon, `-6` = civil twilight (default), `-12` = nautical twilight, `-18` = astronomical twilight.
+
+**`day_progress` scale:** `0` = day start (sunrise/sunset), `100` = midpoint (sunset/sunrise), `200` = next day start.
+
+All original columns are preserved. ACC rows without coordinates inherit all new columns from the GPS row in the same event via `Event_ID`.
+
+
+---
+
 ## Working with the Data
 
 ```r

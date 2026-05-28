@@ -22,6 +22,11 @@ Description: Provides a simple interface to authenticate with the Glosendas
     "2023-03-06 18:47 IST" or POSIXct objects in any timezone are accepted 
     and converted correctly. When saving CSV output, the specified output 
     folder is created automatically if it does not already exist.
+    The add_day_id() function assigns daily identifiers using sunrise or 
+    sunset at the GPS location (via the suncalc package), defined by a 
+    user-specified solar altitude angle (default: -6 degrees, civil 
+    twilight). Optional columns include solar altitude in degrees and day 
+    progress on a 0-200 scale.
 License: MIT + file LICENSE
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -32,7 +37,8 @@ Imports:
     lubridate,
     curl,
     stats,
-    moments
+    moments,
+    suncalc
 Suggests:
     testthat (>= 3.0.0),
     knitr,
