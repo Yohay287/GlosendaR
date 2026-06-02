@@ -149,6 +149,8 @@ Returns a data frame with columns `sn`, `name`, and `imei`.
 
 ### `detect_gps_burst()`
 
+> **Multi-individual datasets:** works correctly on data containing multiple birds — tag boundaries are treated as infinite gaps so bursts are never detected across individuals.
+
 Analyses the GPS fix pattern and automatically detects programmed GPS bursts. Fully vectorised — runs in milliseconds on any dataset size.
 
 ```r
@@ -183,6 +185,8 @@ for (sz in rev(info$collapse_sizes)) {
 ---
 
 ### `collapse_gps_burst()`
+
+> **Multi-individual datasets:** works correctly on data containing multiple birds — burst detection never spans across tag boundaries.
 
 Identifies GPS bursts — runs of **exactly** `burst_size` consecutive GPS fixes each ≤ `max_gap_sec` seconds apart — and collapses each burst into a single representative row. All other rows (ACC bursts, SENSORS, flight detection sequences of a different length) are left completely untouched.
 
@@ -323,6 +327,7 @@ df |>
 
 ## Notes
 
+- All processing functions (`detect_gps_burst`, `collapse_gps_burst`, `analyze_acc`, `add_event_id`, `add_day_id`) work correctly on datasets containing **multiple individuals** — each function respects `tag_name` boundaries so data from different birds is never mixed.
 - Credentials are passed directly to the portal and are never stored by the package.
 - `drop_empty_cols = TRUE` (default) removes columns where every value is `NA` (e.g. `depth_m`, `conductivity_mS/cm`) — set to `FALSE` to keep all portal columns.
 - When `save_csv = TRUE`, the `output_dir` folder is created automatically if it does not already exist.

@@ -129,6 +129,13 @@ detect_gps_burst <- function(df,
   # ── inter-fix gaps (fully vectorised) ────────────────────────────────────────
   gaps <- round(as.numeric(dt[-1] - dt[-length(dt)]))
 
+  # Force Inf gap at tag boundaries so different birds never form a burst
+  if ("tag_name" %in% names(df)) {
+    gps_tags  <- df$tag_name[is_gps]
+    tag_break <- gps_tags[-1] != gps_tags[-length(gps_tags)]
+    gaps[tag_break] <- Inf
+  }
+
   # ── run-length encoding of burst-gap indicator ────────────────────────────────
   # A gap is a "burst gap" if it is between 1 and max_gap_sec seconds.
   is_burst_gap <- !is.na(gaps) & gaps >= 1L & gaps <= max_gap_sec

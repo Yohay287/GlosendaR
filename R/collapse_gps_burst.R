@@ -115,7 +115,11 @@ collapse_gps_burst <- function(df,
 
   both_gps <- is_gps & c(is_gps[-1], FALSE)   # row i AND row i+1 are GPS
 
+  # Prevent burst detection across tag boundaries
+  same_tag <- c(df$tag_name[-1] == df$tag_name[-n], FALSE)
+
   is_burst_gap <- both_gps &
+    same_tag &
     !is.na(gap_rounded) &
     gap_rounded >= 1L &
     gap_rounded <= max_gap_sec
