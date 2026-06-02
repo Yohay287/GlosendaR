@@ -162,6 +162,14 @@ analyze_acc <- function(df,
                       burst_ts_num[boundaries$s] - gps_ts_num[pmax(fi,1L)],
                       NA_real_)
 
+  # Ensure GPS fix belongs to the same individual as the burst
+  if ("tag_name" %in% names(df)) {
+    burst_tag <- df$tag_name[boundaries$s]
+    gps_tag   <- df$tag_name[gps_idx[pmax(fi, 1L)]]
+    has_prev  <- has_prev & (burst_tag == gps_tag)
+    time_diff <- ifelse(has_prev, time_diff, NA_real_)
+  }
+
   # A GPS fix is assigned to a burst when it is exactly one row before ACC_START
   # and within adj_gps_max_min minutes before OR after the burst start time.
   # Negative time_diff means the GPS timestamp is fractionally after the burst
@@ -366,13 +374,26 @@ analyze_acc <- function(df,
   next_start <- c(start_idx[-1L], nrow(df)+1L)
   e_vec  <- integer(n_b)
   trunc_v <- logical(n_b)
+  has_tags <- "tag_name" %in% names(df)
   for (b in seq_len(n_b)) {
-    cands <- end_idx[end_idx > start_idx[b] & end_idx < next_start[b]]
+    s_tag <- if (has_tags) df$tag_name[start_idx[b]] else NULL
+    if (has_tags) {
+      cands <- end_idx[end_idx > start_idx[b] & end_idx < next_start[b] &
+                       df$tag_name[end_idx] == s_tag]
+    } else {
+      cands <- end_idx[end_idx > start_idx[b] & end_idx < next_start[b]]
+    }
     if (length(cands)) { e_vec[b] <- cands[1L]; trunc_v[b] <- FALSE
     } else {
-      aw <- which(is_acc & seq_len(nrow(df)) >= start_idx[b] &
-                    seq_len(nrow(df)) < next_start[b])
-      e_vec[b]  <- if(length(aw)) max(aw) else start_idx[b]
+      if (has_tags) {
+        aw <- which(is_acc & seq_len(nrow(df)) >= start_idx[b] &
+                      seq_len(nrow(df)) < next_start[b] &
+                      df$tag_name == s_tag)
+      } else {
+        aw <- which(is_acc & seq_len(nrow(df)) >= start_idx[b] &
+                      seq_len(nrow(df)) < next_start[b])
+      }
+      e_vec[b]   <- if(length(aw)) max(aw) else start_idx[b]
       trunc_v[b] <- TRUE
     }
   }
