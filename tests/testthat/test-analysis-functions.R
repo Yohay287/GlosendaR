@@ -443,8 +443,35 @@ test_that("add_day_id keeps individuals separate", {
 test_that("unsorted input raises a warning rather than failing silently", {
   shuffled <- raw[sample(nrow(raw)), ]
   rownames(shuffled) <- NULL
-  expect_warning(analyze_acc(shuffled, verbose = FALSE), "not sorted")
-  expect_warning(add_event_id(shuffled, verbose = FALSE), "not sorted")
+  # Shuffling breaks both tag contiguity and time order; either is reportable
+  expect_warning(analyze_acc(shuffled, verbose = FALSE), "Sort")
+  expect_warning(add_event_id(shuffled, verbose = FALSE), "Sort")
+})
+
+test_that("out-of-order time within one tag is reported", {
+  one <- raw[raw$tag_name == BIRDS[1], ]
+  set.seed(7)
+  one <- one[sample(nrow(one)), ]        # tag stays contiguous, time does not
+  rownames(one) <- NULL
+  expect_warning(analyze_acc(one, verbose = FALSE), "backwards in time")
+})
+
+test_that("normal GPS/ACC acquisition lag does NOT trigger the sort warning", {
+  # The portal emits the GPS row before ACC_START even though the GPS timestamp
+  # can be several seconds later. That must never be reported as unsorted.
+  base <- as.POSIXct("2026-02-25 13:00:00", tz = "UTC")
+  for (lag in c(0.03, 0.9, 5, 10)) {
+    d <- data.frame(
+      tag_name = "B",
+      datatype = c("GPS", "SEN_ACC_10Hz_START",
+                   rep("SEN_ACC_10Hz", 8), "SEN_ACC_10Hz_END"),
+      UTC_datetime = c(base + lag, base + (0:9) * 0.1),
+      stringsAsFactors = FALSE)
+    res <- withCallingHandlers(
+      .gl_check_order(d, as.numeric(d$UTC_datetime), "test"),
+      warning = function(w) stop("unexpected warning at lag ", lag))
+    expect_true(res)
+  }
 })
 
 test_that("functions accept data.table / tibble-like inputs", {

@@ -130,37 +130,38 @@
 #' in time within an individual. Unsorted input produces silently wrong results,
 #' so it is flagged rather than left to corrupt the output.
 #'
-#' A small negative gap is normal and is NOT reported: the portal emits the GPS
-#' row before the ACC_START row of the same acquisition even though the GPS
-#' timestamp can be a fraction of a second later (acquisition lag). Only
-#' inversions larger than \code{tol_sec} indicate genuinely unsorted data.
+#' Small backward steps are NORMAL and are not reported: the portal emits the
+#' GPS row before the ACC_START row of the same acquisition even though the GPS
+#' timestamp can be several seconds later (acquisition lag). Genuinely unsorted
+#' data shows backward jumps of minutes to days, so \code{tol_sec} sits far
+#' above the lag but far below real disorder.
 #'
 #' @return TRUE when correctly ordered.
-.gl_check_order <- function(df, ts_num, fn = "this function", tol_sec = 5) {
+.gl_check_order <- function(df, ts_num, fn = "this function", tol_sec = 300) {
   if (nrow(df) < 2L) return(TRUE)
 
-  ok <- TRUE
   if ("tag_name" %in% names(df)) {
     tags <- as.character(df$tag_name)
     # Each tag must occupy one contiguous block
-    r <- rle(tags)
-    if (anyDuplicated(r$values)) ok <- FALSE
+    if (anyDuplicated(rle(tags)$values)) {
+      warning(fn, ": rows for the same tag_name are split into separate ",
+              "blocks. Sort before analysing:\n",
+              "  df <- df[order(df$tag_name, df$UTC_datetime), ]",
+              call. = FALSE)
+      return(FALSE)
+    }
     same_tag <- tags[-1] == tags[-length(tags)]
   } else {
     same_tag <- rep(TRUE, nrow(df) - 1L)
   }
 
-  if (ok) {
-    d <- diff(ts_num)
-    if (any(!is.na(d) & d < -abs(tol_sec) & same_tag)) ok <- FALSE
-  }
+  d   <- diff(ts_num)
+  bad <- !is.na(d) & same_tag & d < -abs(tol_sec)
+  if (!any(bad)) return(TRUE)
 
-  if (!ok)
-    warning(fn, ": rows are not sorted by tag_name and time. ",
-            "Burst, event and day detection assume consecutive rows are ",
-            "consecutive in time within an individual — results will be ",
-            "unreliable. Sort first, e.g.:\n",
-            "  df <- df[order(df$tag_name, df$UTC_datetime), ]",
-            call. = FALSE)
-  ok
+  worst <- min(d[bad])
+  warning(sprintf(
+    "%s: %d row(s) step backwards in time by more than %g s (largest jump %.1f s / %.2f h). Rows should be sorted by tag_name and time. Sort with:\n  df <- df[order(df$tag_name, df$UTC_datetime), ]",
+    fn, sum(bad), abs(tol_sec), worst, worst / 3600), call. = FALSE)
+  FALSE
 }
