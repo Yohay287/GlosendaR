@@ -327,6 +327,11 @@ df |>
 
 ## Notes
 
+- **Rows must be sorted by `tag_name` and time.** Data from `glosendas_download()` already is. If you reorder or combine data frames yourself, sort before analysing:
+  ```r
+  df <- df[order(df$tag_name, df$UTC_datetime), ]
+  ```
+  The analysis functions warn if they detect unsorted input rather than returning silently wrong results.
 - All processing functions (`detect_gps_burst`, `collapse_gps_burst`, `analyze_acc`, `add_event_id`, `add_day_id`) work correctly on datasets containing **multiple individuals** — each function respects `tag_name` boundaries so data from different birds is never mixed.
 - Credentials are passed directly to the portal and are never stored by the package.
 - `drop_empty_cols = TRUE` (default) removes columns where every value is `NA` (e.g. `depth_m`, `conductivity_mS/cm`) — set to `FALSE` to keep all portal columns.
@@ -343,8 +348,9 @@ R >= 4.0.0 and the following packages (installed automatically):
 
 - `httr`
 - `stringr`
-- `lubridate`
 - `curl`
+- `moments` (accelerometer statistics)
+- `suncalc` (solar day boundaries)
 
 ## License
 

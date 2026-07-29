@@ -88,7 +88,8 @@ collapse_gps_burst <- function(df,
   burst_size <- as.integer(burst_size)
 
   # ── parse datetime ───────────────────────────────────────────────────────────
-  dt <- .parse_dt_multi(df$UTC_datetime)
+  dt <- .gl_to_posix(df$UTC_datetime)
+  .gl_check_order(df, as.numeric(dt), "collapse_gps_burst")
 
   # ── identify GPS rows ────────────────────────────────────────────────────────
   is_gps <- !is.na(df$datatype) & trimws(df$datatype) == "GPS"
@@ -198,32 +199,33 @@ collapse_gps_burst <- function(df,
     keep_cumsum   <- cumsum(keep)
     out_row_of    <- keep_cumsum[burst_first_row]   # output row for each burst's first fix
 
+    # Index matrix is identical for every column — build it once, not per column
+    burst_indices <- outer(0L:(burst_size - 1L), burst_first_row, `+`)
+
     for (cn in names(df)) {
       if (cn %in% dt_col_names) next   # datetime: keep first row value
 
-      # Try converting column to numeric
-      col_vals <- suppressWarnings(as.numeric(df[[cn]]))
+      orig_is_num <- is.numeric(df[[cn]])
+      col_vals    <- if (orig_is_num) df[[cn]]
+                     else suppressWarnings(as.numeric(df[[cn]]))
       if (all(is.na(col_vals[is_gps]))) next   # entirely non-numeric for GPS rows
 
       dec <- col_dec[cn]
 
-      # Compute means for all bursts at once using matrix approach
-      # Extract burst values into a matrix (burst_size rows x n_bursts cols)
-      # then colMeans
-      burst_indices <- outer(0L:(burst_size - 1L), burst_first_row, `+`)
-      # burst_indices is burst_size x n_bursts matrix of original row indices
-      burst_vals    <- matrix(col_vals[burst_indices], nrow = burst_size)
-      burst_means   <- colMeans(burst_vals, na.rm = TRUE)
+      burst_vals  <- matrix(col_vals[burst_indices], nrow = burst_size)
+      burst_means <- colMeans(burst_vals, na.rm = TRUE)
 
-      # Round to original decimal precision
-      rounded <- if (dec == 0L) {
-        as.character(round(burst_means))
+      # Preserve the column's original type: a numeric column stays numeric.
+      # (Previously every averaged column was coerced to character.)
+      if (orig_is_num) {
+        out[[cn]][out_row_of] <- round(burst_means, dec)
       } else {
-        format(round(burst_means, dec), nsmall = dec, trim = TRUE)
+        out[[cn]][out_row_of] <- if (dec == 0L) {
+          as.character(round(burst_means))
+        } else {
+          format(round(burst_means, dec), nsmall = dec, trim = TRUE)
+        }
       }
-
-      # Assign to output rows (vectorised)
-      out[[cn]][out_row_of] <- rounded
     }
   }
 
@@ -246,24 +248,6 @@ collapse_gps_burst <- function(df,
 # INTERNAL HELPERS (shared with detect_gps_burst.R)
 # ==============================================================================
 
-#' @noRd
-.parse_dt_multi <- function(x) {
-  fmts <- c(
-    "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S",
-    "%Y-%m-%d %H:%M:%S",  "%Y-%m-%d %H:%M",
-    "%d/%m/%Y %H:%M:%S",  "%d/%m/%Y %H:%M"
-  )
-  result    <- rep(as.POSIXct(NA_real_, tz = "UTC"), length(x))
-  remaining <- seq_along(x)
-  for (fmt in fmts) {
-    if (!length(remaining)) break
-    parsed <- suppressWarnings(as.POSIXct(x[remaining], format = fmt, tz = "UTC"))
-    ok               <- !is.na(parsed)
-    result[remaining[ok]] <- parsed[ok]
-    remaining        <- remaining[!ok]
-  }
-  result
-}
 
 
 #' @noRd

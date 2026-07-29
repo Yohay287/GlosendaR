@@ -97,16 +97,11 @@ add_day_id <- function(df,
     stop("Missing required columns: ", paste(missing, collapse = ", "))
 
   # ── parse timestamps ───────────────────────────────────────────────────────
-  .to_posixct <- function(x) {
-    if (inherits(x, "POSIXct"))
-      return(as.POSIXct(as.numeric(x), origin = "1970-01-01", tz = "UTC"))
-    if (is.numeric(x))
-      return(as.POSIXct(x, origin = "1970-01-01", tz = "UTC"))
-    suppressWarnings(as.POSIXct(as.character(x), tz = "UTC"))
-  }
 
-  ts     <- .to_posixct(df[[timestamp_col]])
+  ts     <- .gl_to_posix(df[[timestamp_col]])
   ts_num <- as.numeric(ts)
+
+  .gl_check_order(df, ts_num, "add_day_id")
 
   lat <- suppressWarnings(as.numeric(df[[lat_col]]))
   lon <- suppressWarnings(as.numeric(df[[lon_col]]))
@@ -120,8 +115,8 @@ add_day_id <- function(df,
   # One representative coord per unique tag+date key (vectorised via tapply)
   unique_keys <- unique(tag_date_key[has_coord])
 
-  med_lat <- tapply(lat[has_coord],  tag_date_key[has_coord], median)
-  med_lon <- tapply(lon[has_coord],  tag_date_key[has_coord], median)
+  med_lat <- tapply(lat[has_coord],  tag_date_key[has_coord], stats::median)
+  med_lon <- tapply(lon[has_coord],  tag_date_key[has_coord], stats::median)
 
   # Parse tag and date back out of the key
   key_parts <- strsplit(unique_keys, "__", fixed = TRUE)
@@ -148,12 +143,16 @@ add_day_id <- function(df,
   direction     <- if (type == "diurnal") "rise" else "set"
 
   # Initial search window per combo (epoch seconds)
+  # Day start in epoch seconds; "24:00:00" is not portable across platforms,
+  # so end-of-day is expressed as midnight + 86400.
+  day0 <- as.numeric(as.POSIXct(paste(agg_date, "00:00:00"), tz = "UTC"))
+
   if (direction == "rise") {
-    t_lo <- as.numeric(as.POSIXct(paste(agg_date, "00:00:00"), tz = "UTC"))
-    t_hi <- as.numeric(as.POSIXct(paste(agg_date, "14:00:00"), tz = "UTC"))
+    t_lo <- day0
+    t_hi <- day0 + 14 * 3600
   } else {
-    t_lo <- as.numeric(as.POSIXct(paste(agg_date, "10:00:00"), tz = "UTC"))
-    t_hi <- as.numeric(as.POSIXct(paste(agg_date, "24:00:00"), tz = "UTC"))
+    t_lo <- day0 + 10 * 3600
+    t_hi <- day0 + 86400
   }
 
   converged <- rep(FALSE, n_combos)
@@ -196,11 +195,11 @@ add_day_id <- function(df,
     opp_direction <- if (direction == "rise") "set" else "rise"
 
     if (opp_direction == "set") {
-      opp_lo <- as.numeric(as.POSIXct(paste(agg_date, "10:00:00"), tz = "UTC"))
-      opp_hi <- as.numeric(as.POSIXct(paste(agg_date, "24:00:00"), tz = "UTC"))
+      opp_lo <- day0 + 10 * 3600
+      opp_hi <- day0 + 86400
     } else {
-      opp_lo <- as.numeric(as.POSIXct(paste(agg_date, "00:00:00"), tz = "UTC"))
-      opp_hi <- as.numeric(as.POSIXct(paste(agg_date, "14:00:00"), tz = "UTC"))
+      opp_lo <- day0
+      opp_hi <- day0 + 14 * 3600
     }
 
     opp_converged <- rep(FALSE, n_combos)
@@ -221,7 +220,7 @@ add_day_id <- function(df,
       } else {
         below <- alt < sun_angle_rad
         opp_lo[active[below]]  <- t_mid[below]
-        opp_hi[active[!above]] <- t_mid[!above]
+        opp_hi[active[!below]] <- t_mid[!below]
       }
       opp_converged[active] <- (opp_hi[active] - opp_lo[active]) < 1
     }
@@ -251,11 +250,16 @@ add_day_id <- function(df,
   # Assign Day_ID per row using findInterval (one call per tag)
   day_ids <- character(nrow(df))
 
+  # One pass to group row indices by tag instead of a full scan per tag
+  rows_by_tag  <- split(seq_len(nrow(df)), df$tag_name)
+  cross_by_tag <- split(cross_frame, cross_frame$tag)
+
   # Process each tag separately (tags have independent crossing schedules)
-  for (tg in unique(df$tag_name)) {
-    row_idx    <- which(df$tag_name == tg)
+  for (tg in names(rows_by_tag)) {
+    row_idx    <- rows_by_tag[[tg]]
     tag_ts     <- ts_num[row_idx]
-    tag_cross  <- cross_frame[cross_frame$tag == tg, ]
+    tag_cross  <- cross_by_tag[[tg]]
+    if (is.null(tag_cross)) tag_cross <- cross_frame[0, ]
 
     if (nrow(tag_cross) == 0) {
       # No coordinate data for this tag — fall back to UTC date
@@ -267,13 +271,13 @@ add_day_id <- function(df,
     # findInterval: for each row timestamp, find index of last crossing <= ts
     fi <- findInterval(tag_ts, tag_cross$epoch)
 
-    # fi == 0 means before first crossing — use first crossing date minus 1
-    date_vec         <- tag_cross$date
-    day_date         <- ifelse(fi == 0L,
-                               as.integer(date_vec[1] - 1),
-                               as.integer(date_vec[fi]))
-    day_date         <- as.Date(day_date, origin = "1970-01-01")
-    day_ids[row_idx] <- paste0(tg, "_", format(day_date, "%Y%m%d"))
+    # Format each crossing date once, then index — rather than formatting
+    # one Date per row (millions of format() calls on large datasets).
+    lbl        <- paste0(tg, "_", format(tag_cross$date, "%Y%m%d"))
+    lbl_before <- paste0(tg, "_", format(tag_cross$date[1] - 1, "%Y%m%d"))
+
+    # fi == 0 means before the first crossing — belongs to the previous day
+    day_ids[row_idx] <- ifelse(fi == 0L, lbl_before, lbl[pmax(fi, 1L)])
   }
 
   df$Day_ID <- day_ids
@@ -300,41 +304,41 @@ add_day_id <- function(df,
   if (day_progress) {
     day_prog <- rep(NA_real_, nrow(df))
 
-    for (tg in unique(df$tag_name)) {
-      row_idx   <- which(df$tag_name == tg)
+    for (tg in names(rows_by_tag)) {
+      row_idx   <- rows_by_tag[[tg]]
       tag_ts    <- ts_num[row_idx]
-      tag_cross <- cross_frame[cross_frame$tag == tg, ]
-      if (nrow(tag_cross) == 0) next
+      tag_cross <- cross_by_tag[[tg]]
+      if (is.null(tag_cross) || nrow(tag_cross) == 0) next
 
       cross_times <- tag_cross$epoch
-      opp_times   <- opp_epoch[tag_cross$key]
+      opp_times   <- as.numeric(opp_epoch[tag_cross$key])
+      n_cross     <- length(cross_times)
 
-      # For each row: find its day period (start crossing and opposite crossing)
+      # Next day start for each crossing (last one falls back to +24 h)
+      next_times <- c(cross_times[-1L], cross_times[n_cross] + 86400)
+
       fi <- findInterval(tag_ts, cross_times)
+      ok <- fi > 0L
 
-      for (j in seq_along(row_idx)) {
-        idx <- fi[j]
-        if (idx == 0L || idx > nrow(tag_cross)) next
+      # Fully vectorised: no per-row loop
+      idx     <- pmax(fi, 1L)
+      t_start <- cross_times[idx]
+      t_opp   <- opp_times[idx]
+      t_end   <- next_times[idx]
 
-        t_start <- cross_times[idx]
-        t_opp   <- opp_times[idx]
-        # next start crossing = start crossing of the next day
-        t_end   <- if (idx < nrow(tag_cross)) cross_times[idx + 1L]
-                   else t_start + 86400   # fallback: +1 day
+      ok <- ok & !is.na(t_opp) & tag_ts >= t_start
 
-        t_now <- tag_ts[j]
-        if (t_now < t_start || is.na(t_opp)) next
+      first_half <- ok & tag_ts <= t_opp
+      second_half <- ok & tag_ts > t_opp
 
-        if (t_now <= t_opp) {
-          # First half: 0 to 100 (start -> opposite)
-          day_prog[row_idx[j]] <- round(100 * (t_now - t_start) /
-                                          max(1, t_opp - t_start), 2)
-        } else {
-          # Second half: 100 to 200 (opposite -> next start)
-          day_prog[row_idx[j]] <- round(100 + 100 * (t_now - t_opp) /
-                                          max(1, t_end - t_opp), 2)
-        }
-      }
+      prog <- rep(NA_real_, length(row_idx))
+      prog[first_half] <- 100 * (tag_ts[first_half] - t_start[first_half]) /
+        pmax(1, t_opp[first_half] - t_start[first_half])
+      prog[second_half] <- 100 + 100 *
+        (tag_ts[second_half] - t_opp[second_half]) /
+        pmax(1, t_end[second_half] - t_opp[second_half])
+
+      day_prog[row_idx] <- round(prog, 2)
     }
     df$day_progress <- day_prog
   }

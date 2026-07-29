@@ -115,7 +115,8 @@ detect_gps_burst <- function(df,
   gps_df  <- df[is_gps, , drop = FALSE]
 
   # ── parse datetime ────────────────────────────────────────────────────────────
-  dt <- .parse_dt_multi(gps_df$UTC_datetime)
+  dt <- .gl_to_posix(gps_df$UTC_datetime)
+  .gl_check_order(gps_df, as.numeric(dt), "detect_gps_burst")
   dt <- dt[!is.na(dt)]
 
   if (length(dt) < 4) {

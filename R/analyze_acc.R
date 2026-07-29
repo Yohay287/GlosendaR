@@ -6,6 +6,9 @@
 #' all six portal formats (V1 and V2). Fully vectorised for performance on
 #' large datasets.
 #'
+#' Rows must be sorted by \code{tag_name} and time; a warning is issued if
+#' they are not.
+#'
 #' @param df Data frame from \code{glosendas_download()}.
 #' @param adj_gps_max_min Numeric. A GPS fix is assigned to a burst when it is
 #'   exactly one row before \code{ACC_START} and its timestamp is within this
@@ -39,12 +42,10 @@ analyze_acc <- function(df,
                         verbose            = TRUE) {
 
   # ── guards ───────────────────────────────────────────────────────────────────
-  if (!is.data.frame(df))        stop("`df` must be a data frame.")
-
-  # Coerce data.table / tibble to plain data.frame
+  if (!inherits(df, "data.frame")) stop("`df` must be a data frame.")
   if (!identical(class(df), "data.frame")) df <- as.data.frame(df)
   if (nrow(df) == 0)             stop("`df` has zero rows.")
-  if (adj_gps_max_min < 0)    stop("`adj_gps_max_min` must be >= 0.")
+  if (adj_gps_max_min < 0)       stop("`adj_gps_max_min` must be >= 0.")
   if (v1_burst_gap_sec < 0)      stop("`v1_burst_gap_sec` must be >= 0.")
   miss <- setdiff(c("datatype","acc_x","acc_y","acc_z"), names(df))
   if (length(miss)) stop("Missing columns: ", paste(miss, collapse=", "))
@@ -58,69 +59,54 @@ analyze_acc <- function(df,
     if (any(bad)) { df <- df[!bad,]; rownames(df) <- NULL }
   }
 
-  # ── coerce ACC ───────────────────────────────────────────────────────────────
-  df$acc_x <- suppressWarnings(as.numeric(df$acc_x))
-  df$acc_y <- suppressWarnings(as.numeric(df$acc_y))
-  df$acc_z <- suppressWarnings(as.numeric(df$acc_z))
+  # ── coerce ACC only when needed (avoids 3 full copies of large columns) ─────
+  df$acc_x <- .gl_as_num(df$acc_x)
+  df$acc_y <- .gl_as_num(df$acc_y)
+  df$acc_z <- .gl_as_num(df$acc_z)
 
-  # ── build precise timestamp ──────────────────────────────────────────────────
-  has_precise <- all(c("UTC_date","UTC_time") %in% names(df))
-  if (has_precise) {
-    base_ts <- suppressWarnings(
-      as.POSIXct(paste(df$UTC_date, df$UTC_time),
-                 format="%Y-%m-%d %H:%M:%S", tz="UTC"))
-    bad2 <- is.na(base_ts)
-    if (any(bad2))
-      base_ts[bad2] <- suppressWarnings(
-        as.POSIXct(paste(df$UTC_date[bad2], df$UTC_time[bad2]),
-                   format="%d/%m/%Y %H:%M:%S", tz="UTC"))
-    if ("milliseconds" %in% names(df)) {
-      ms <- suppressWarnings(as.numeric(df$milliseconds))
-      ms[is.na(ms)] <- 0
-      df$UTC_precise <- base_ts + ms/1000
-    } else {
-      df$UTC_precise <- base_ts
-    }
-  } else if ("UTC_datetime" %in% names(df)) {
-    df$UTC_precise <- suppressWarnings(as.POSIXct(df$UTC_datetime, tz="UTC"))
-  } else {
-    df$UTC_precise <- as.POSIXct(NA_real_, tz="UTC")
-  }
+  # ── precise timestamp: prefer an existing sub-second column ────────────────
+  ts_precise   <- .gl_best_timestamp(df)
+  burst_ts_num <- as.numeric(ts_precise)
 
   if ("UTC_datetime" %in% names(df) && !inherits(df$UTC_datetime,"POSIXct"))
-    df$UTC_datetime <- suppressWarnings(as.POSIXct(df$UTC_datetime, tz="UTC"))
+    df$UTC_datetime <- .gl_to_posix(df$UTC_datetime)
 
-  # ── detect format ────────────────────────────────────────────────────────────
-  has_v2 <- any(grepl("^SEN_ACC_[0-9]+[Hh]z", df$datatype))
-  has_v1 <- any(df$datatype == "SENSORS")
+  .gl_check_order(df, burst_ts_num, "analyze_acc")
+
+  # ── classify datatype once (startsWith/endsWith, no repeated regex) ────────
+  cls    <- .gl_classify(df$datatype)
+  has_v2 <- any(cls$acc_any)
+  has_v1 <- any(cls$sensors)
 
   if (!has_v2 && !has_v1) {
     if (verbose) message("No ACC rows found.")
-    df$UTC_precise <- NULL
-    if (include_burst_rows) return(df) else return(df)
+    return(df)
   }
 
-  is_acc <- if (has_v2) grepl("^SEN_ACC_[0-9]+[Hh]z", df$datatype)
-            else        df$datatype == "SENSORS"
-  is_gps <- df$datatype %in% c("GPS","GPSF")
+  is_acc <- if (has_v2) cls$acc_any else cls$sensors
+  is_gps <- cls$gps          # includes GPS_ACC, so re-running is safe
 
   if (verbose) {
     fmt <- if (has_v2) "V2 (SEN_ACC_*Hz)" else "V1 (SENSORS)"
     message(sprintf("Detecting ACC bursts — format: %s", fmt))
   }
 
-  # ── find burst boundaries ────────────────────────────────────────────────────
-  boundaries <- if (has_v2) .acc_bounds_v2(df) else .acc_bounds_v1(df, v1_burst_gap_sec)
+  tag_vec <- if ("tag_name" %in% names(df)) as.character(df$tag_name) else NULL
+
+  # ── find burst boundaries ───────────────────────────────────────────────────
+  boundaries <- if (has_v2)
+    .acc_bounds_v2(nrow(df), cls, tag_vec)
+  else
+    .acc_bounds_v1(which(cls$sensors), burst_ts_num, v1_burst_gap_sec)
 
   n_bursts_raw <- nrow(boundaries)
   if (n_bursts_raw == 0L) {
     if (verbose) message("No ACC bursts found.")
-    df$UTC_precise <- NULL
     if (include_burst_rows) return(df) else return(df[!is_acc,])
   }
   if (verbose) message(sprintf("Found %d burst(s)", n_bursts_raw))
 
-  # ── initialise output columns ────────────────────────────────────────────────
+  # ── initialise output columns ───────────────────────────────────────────────
   basic_cols <- c("acc_burst_n","acc_freq_hz","acc_duration_sec",
                   "mean_x","sd_x","mean_y","sd_y",
                   "mean_z","sd_z","acc_odba")
@@ -142,118 +128,120 @@ analyze_acc <- function(df,
   )
   all_num_cols <- if (advanced) c(basic_cols, adv_cols) else basic_cols
   for (col in all_num_cols) df[[col]] <- NA_real_
-  df$acc_burst_type    <- NA_character_
-  df$gps_to_burst_sec  <- NA_real_
+  df$acc_burst_type   <- NA_character_
+  df$gps_to_burst_sec <- NA_real_
 
-  gps_idx      <- which(is_gps)
-  burst_ts_num <- as.numeric(df$UTC_precise)
-  gps_ts_num   <- burst_ts_num[gps_idx]
+  gps_idx    <- which(is_gps)
+  gps_ts_num <- burst_ts_num[gps_idx]
 
-  # ── pre-compute per-burst scalars (fully vectorised) ─────────────────────────
-  n_trunc  <- sum(isTRUE(boundaries$truncated))
+  # ── per-burst scalars (vectorised) ─────────────────────────────────────────
+  n_trunc  <- sum(boundaries$truncated)
   freq_vec <- suppressWarnings(
-    as.numeric(stringr::str_extract(boundaries$type, "[0-9]+(?=[Hh]z)")))
+    as.numeric(sub("^.*_([0-9]+)[Hh]z$", "\\1", boundaries$type)))
   dur_vec  <- abs(burst_ts_num[boundaries$e] - burst_ts_num[boundaries$s])
 
-  # ── GPS matching: findInterval() — binary search for ALL bursts at once ───────
+  # ── GPS matching: findInterval() — binary search for ALL bursts at once ────
   fi        <- findInterval(boundaries$s - 1L, gps_idx)
   has_prev  <- fi > 0L
   time_diff <- ifelse(has_prev,
                       burst_ts_num[boundaries$s] - gps_ts_num[pmax(fi,1L)],
                       NA_real_)
 
-  # Ensure GPS fix belongs to the same individual as the burst
-  if ("tag_name" %in% names(df)) {
-    burst_tag <- df$tag_name[boundaries$s]
-    gps_tag   <- df$tag_name[gps_idx[pmax(fi, 1L)]]
+  # GPS fix must belong to the same individual as the burst
+  if (!is.null(tag_vec)) {
+    burst_tag <- tag_vec[boundaries$s]
+    gps_tag   <- tag_vec[gps_idx[pmax(fi, 1L)]]
     has_prev  <- has_prev & (burst_tag == gps_tag)
     time_diff <- ifelse(has_prev, time_diff, NA_real_)
   }
 
-  # A GPS fix is assigned to a burst when it is exactly one row before ACC_START
-  # and within adj_gps_max_min minutes before OR after the burst start time.
-  # Negative time_diff means the GPS timestamp is fractionally after the burst
-  # start — this is valid and expected due to same-second acquisition lag.
+  # Assigned when the GPS row is exactly one row before ACC_START and within
+  # adj_gps_max_min minutes before OR after the burst start time. Negative
+  # time_diff (GPS timestamp fractionally after burst start) is expected and
+  # valid, caused by same-second acquisition lag.
   adj_gps_max_sec <- adj_gps_max_min * 60
   prev_row_is_gps <- has_prev & (gps_idx[pmax(fi,1L)] == boundaries$s - 1L)
   matched         <- prev_row_is_gps & !is.na(time_diff) &
                      time_diff >= -adj_gps_max_sec & time_diff <= adj_gps_max_sec
   target_gps      <- ifelse(matched, gps_idx[pmax(fi,1L)], NA_integer_)
 
-  # gps_to_burst_sec: signed time gap (burst_start_time - GPS_time) in seconds.
-  # Positive = GPS is before burst start (normal).
-  # Negative = GPS timestamp is fractionally after burst start (acquisition lag).
-  # NA      = no GPS fix assigned (orphan burst).
   gps_to_burst_sec <- ifelse(matched, round(time_diff, 2), NA_real_)
+  orphan_src       <- which(!matched)
 
-  orphan_src <- which(!matched)
+  # ── assign burst ID to every ACC row ───────────────────────────────────────
+  burst_len <- boundaries$e - boundaries$s + 1L
+  burst_id  <- integer(nrow(df))
+  burst_id[unlist(Map(seq.int, boundaries$s, boundaries$e),
+                  use.names = FALSE)] <-
+    rep.int(seq_len(n_bursts_raw), burst_len)
 
-  # ── assign burst ID to every ACC row for tapply grouping ─────────────────────
-  # Small loop over n_bursts (integer assignment only — fast even for 100k bursts)
-  burst_id <- integer(nrow(df))
-  for (b in seq_len(n_bursts_raw))
-    burst_id[boundaries$s[b]:boundaries$e[b]] <- b
-
-  # ── per-burst basic stats via tapply (O(n_acc_rows) total) ───────────────────
+  # ── per-burst basic stats via rowsum (C-level; exact two-pass sd) ──────────
   acc_mask <- burst_id > 0L
   bids     <- burst_id[acc_mask]
   axv      <- df$acc_x[acc_mask]
   ayv      <- df$acc_y[acc_mask]
   azv      <- df$acc_z[acc_mask]
 
-  .tap <- function(vals, FUN) {
-    res <- tapply(vals, bids, FUN)
-    out <- rep(NA_real_, n_bursts_raw)
-    out[as.integer(names(res))] <- as.numeric(res)
-    out
+  ok_row <- !is.na(axv) & !is.na(ayv) & !is.na(azv)
+  b_ok   <- bids[ok_row]
+  ax     <- axv[ok_row]; ay <- ayv[ok_row]; az <- azv[ok_row]
+
+  cnt   <- tabulate(b_ok, nbins = n_bursts_raw)
+  blank <- function() rep(NA_real_, n_bursts_raw)
+  xm  <- blank(); ym  <- blank(); zm  <- blank()
+  xsd <- blank(); ysd <- blank(); zsd <- blank(); odba <- blank()
+
+  if (length(b_ok)) {
+    S       <- rowsum(cbind(ax, ay, az), b_ok, reorder = TRUE)
+    present <- as.integer(rownames(S))
+    np      <- cnt[present]
+    xm[present] <- S[,1] / np
+    ym[present] <- S[,2] / np
+    zm[present] <- S[,3] / np
+
+    # Second pass over deviations: numerically exact, and gives ODBA for free
+    dx <- ax - xm[b_ok]; dy <- ay - ym[b_ok]; dz <- az - zm[b_ok]
+    SS <- rowsum(cbind(dx*dx, dy*dy, dz*dz, abs(dx) + abs(dy) + abs(dz)),
+                 b_ok, reorder = TRUE)
+    denom <- pmax(np - 1L, 1L)
+    xsd[present]  <- sqrt(SS[,1] / denom)
+    ysd[present]  <- sqrt(SS[,2] / denom)
+    zsd[present]  <- sqrt(SS[,3] / denom)
+    odba[present] <- SS[,4] / np
   }
 
-  valid_fn <- function(x) length(x[!is.na(x)]) >= 2L
+  valid <- cnt >= 2L
+  xm[!valid]   <- NA_real_; ym[!valid]  <- NA_real_; zm[!valid]  <- NA_real_
+  xsd[!valid]  <- NA_real_; ysd[!valid] <- NA_real_; zsd[!valid] <- NA_real_
+  odba[!valid] <- NA_real_
+  n_skip <- sum(!valid)
 
-  xm  <- .tap(axv, function(x) if(valid_fn(x)) mean(x,na.rm=TRUE)       else NA_real_)
-  ym  <- .tap(ayv, function(x) if(valid_fn(x)) mean(x,na.rm=TRUE)       else NA_real_)
-  zm  <- .tap(azv, function(x) if(valid_fn(x)) mean(x,na.rm=TRUE)       else NA_real_)
-  xsd <- .tap(axv, function(x) if(valid_fn(x)) stats::sd(x,na.rm=TRUE)  else NA_real_)
-  ysd <- .tap(ayv, function(x) if(valid_fn(x)) stats::sd(x,na.rm=TRUE)  else NA_real_)
-  zsd <- .tap(azv, function(x) if(valid_fn(x)) stats::sd(x,na.rm=TRUE)  else NA_real_)
-  bn  <- .tap(axv, function(x) sum(!is.na(x)))
-
-  # ODBA via tapply (needs per-burst mean subtraction)
-  odba_res <- tapply(seq_along(bids), bids, function(idx) {
-    ax2 <- axv[idx][!is.na(axv[idx])]
-    ay2 <- ayv[idx][!is.na(ayv[idx])]
-    az2 <- azv[idx][!is.na(azv[idx])]
-    if (any(lengths(list(ax2,ay2,az2)) < 2L)) return(NA_real_)
-    mean(abs(ax2-mean(ax2)) + abs(ay2-mean(ay2)) + abs(az2-mean(az2)))
-  })
-  odba <- rep(NA_real_, n_bursts_raw)
-  odba[as.integer(names(odba_res))] <- as.numeric(odba_res)
-
-  valid   <- !is.na(xm) & !is.na(ym) & !is.na(zm)
-  n_skip  <- sum(!valid)
-
-  # Fill stat matrix (vectorised column assignment)
-  stat_mat <- matrix(NA_real_, nrow=n_bursts_raw, ncol=length(all_num_cols))
+  stat_mat <- matrix(NA_real_, nrow = n_bursts_raw, ncol = length(all_num_cols))
   colnames(stat_mat) <- all_num_cols
-  stat_mat[,"acc_burst_n"]      <- bn
+  stat_mat[,"acc_burst_n"]      <- cnt
   stat_mat[,"acc_freq_hz"]      <- freq_vec
-  stat_mat[,"acc_duration_sec"] <- round(dur_vec,2)
-  stat_mat[,"mean_x"]           <- round(xm, 3)
-  stat_mat[,"sd_x"]             <- round(xsd,3)
-  stat_mat[,"mean_y"]           <- round(ym, 3)
-  stat_mat[,"sd_y"]             <- round(ysd,3)
-  stat_mat[,"mean_z"]           <- round(zm, 3)
-  stat_mat[,"sd_z"]             <- round(zsd,3)
-  stat_mat[,"acc_odba"]         <- round(odba,3)
+  stat_mat[,"acc_duration_sec"] <- round(dur_vec, 2)
+  stat_mat[,"mean_x"]           <- round(xm,  3)
+  stat_mat[,"sd_x"]             <- round(xsd, 3)
+  stat_mat[,"mean_y"]           <- round(ym,  3)
+  stat_mat[,"sd_y"]             <- round(ysd, 3)
+  stat_mat[,"mean_z"]           <- round(zm,  3)
+  stat_mat[,"sd_z"]             <- round(zsd, 3)
+  stat_mat[,"acc_odba"]         <- round(odba, 3)
   type_vec <- boundaries$type
 
-  # ── advanced stats (loop only over valid bursts; no per-row work) ─────────────
-  if (advanced) {
-    for (b in which(valid)) {
-      idx <- which(bids == b)
-      ax2 <- axv[idx]; ay2 <- ayv[idx]; az2 <- azv[idx]
-      ax2 <- ax2[!is.na(ax2)]; ay2 <- ay2[!is.na(ay2)]; az2 <- az2[!is.na(az2)]
-      if (any(lengths(list(ax2,ay2,az2)) < 2L)) next
+  # ── advanced stats ─────────────────────────────────────────────────────────
+  # Row indices are grouped once with split(); the previous which(bids == b)
+  # inside the loop rescanned every ACC row for every burst.
+  if (advanced && length(b_ok)) {
+    idx_by_burst <- split(seq_along(b_ok), b_ok)
+    bnames       <- as.integer(names(idx_by_burst))
+    for (k in seq_along(idx_by_burst)) {
+      b <- bnames[k]
+      if (!valid[b]) next
+      idx <- idx_by_burst[[k]]
+      ax2 <- ax[idx]; ay2 <- ay[idx]; az2 <- az[idx]
+      if (length(ax2) < 2L) next
       adv_vals <- tryCatch(c(
         round(max(ax2)-min(ax2),3),round(max(ay2)-min(ay2),3),round(max(az2)-min(az2),3),
         round(max(ax2),3),round(max(ay2),3),round(max(az2),3),
@@ -278,67 +266,49 @@ analyze_acc <- function(df,
         round(mean(ax2-ay2),3),round(mean(ax2-az2),3),round(mean(ay2-az2),3),
         round(stats::sd(ax2-ay2),3),round(stats::sd(ax2-az2),3),
         round(stats::sd(ay2-az2),3),
-        round(if(length(ax2)>1)mean(abs(diff(ax2)))else NA_real_,3),
-        round(if(length(ay2)>1)mean(abs(diff(ay2)))else NA_real_,3),
-        round(if(length(az2)>1)mean(abs(diff(az2)))else NA_real_,3)
-      ),error=function(e) rep(NA_real_,length(adv_cols)))
-      stat_mat[b,adv_cols] <- adv_vals
+        round(mean(abs(diff(ax2))),3),
+        round(mean(abs(diff(ay2))),3),
+        round(mean(abs(diff(az2))),3)
+      ), error=function(e) rep(NA_real_,length(adv_cols)))
+      stat_mat[b, adv_cols] <- adv_vals
     }
   }
 
-  # ── attach stats to GPS rows (vectorised assignment) ─────────────────────────
+  # ── attach stats to GPS rows (single block assignment) ─────────────────────
   attached <- target_gps[!is.na(target_gps)]
   b_idx    <- which(!is.na(target_gps))
-  for (col in all_num_cols)
-    df[[col]][attached] <- stat_mat[b_idx, col]
-  df$acc_burst_type[attached]   <- type_vec[b_idx]
-  df$gps_to_burst_sec[attached] <- gps_to_burst_sec[b_idx]
-  # Mark GPS rows that have ACC data attached
-  df$datatype[attached] <- "GPS_ACC"
+  if (length(attached)) {
+    df[attached, all_num_cols]    <- stat_mat[b_idx, , drop = FALSE]
+    df$acc_burst_type[attached]   <- type_vec[b_idx]
+    df$gps_to_burst_sec[attached] <- gps_to_burst_sec[b_idx]
+    df$datatype[attached]         <- "GPS_ACC"
+  }
 
   n_attached <- length(attached)
   n_new_row  <- length(orphan_src)
 
-  # ── build output ─────────────────────────────────────────────────────────────
-  keep_mask      <- if (include_burst_rows) rep(TRUE,nrow(df)) else !is_acc
-  df$UTC_precise <- NULL
-  out            <- df[keep_mask,,drop=FALSE]
-  rownames(out)  <- NULL
+  # ── build output ───────────────────────────────────────────────────────────
+  keep_mask <- if (include_burst_rows) rep(TRUE, nrow(df)) else !is_acc
+  out       <- df[keep_mask, , drop = FALSE]
+  kept_orig <- which(keep_mask)
 
-  # insert orphan ACC_SUMMARY rows (rare — only when no GPS precedes a burst)
-  if (n_new_row > 0L && verbose)
-    message(sprintf("  Inserting %d ACC_SUMMARY orphan row(s)...", n_new_row))
+  # ── orphan ACC_SUMMARY rows: build all at once, then one rbind + order ─────
+  # (previously one rbind per orphan, copying the whole frame each time)
   if (n_new_row > 0L) {
-    # Process in reverse order so earlier insertions do not shift later positions.
-    # Instead of tracking orig_idx through insertions, recompute position each time
-    # from the original keep_mask (valid for rows that existed before any insertion).
-    orig_rows <- which(keep_mask)   # original row numbers that survived the slice
-    for (b in rev(orphan_src)) {
-      s   <- boundaries$s[b]
-      # How many original rows come before burst start s?
-      pos <- sum(orig_rows < s, na.rm = TRUE)
-      new_row             <- df[s, , drop = FALSE]
-      new_row$datatype    <- "ACC_SUMMARY"
-      new_row$UTC_precise <- NULL
-      for (col in all_num_cols) new_row[[col]] <- stat_mat[b, col]
-      new_row$acc_burst_type   <- type_vec[b]
-      new_row$gps_to_burst_sec <- NA_real_
-      if (pos == 0L) {
-        out <- rbind(new_row, out)
-      } else if (pos >= nrow(out)) {
-        out <- rbind(out, new_row)
-      } else {
-        out <- rbind(out[seq_len(pos), , drop = FALSE],
-                     new_row,
-                     out[(pos + 1L):nrow(out), , drop = FALSE])
-      }
-      # Insert NA placeholder in orig_rows so positions stay aligned
-      # for any subsequent (earlier) orphan insertions
-      orig_rows <- c(orig_rows[seq_len(pos)], NA_integer_,
-                     orig_rows[seq(pos + 1L, length(orig_rows))])
-    }
-    rownames(out) <- NULL
+    if (verbose)
+      message(sprintf("  Inserting %d ACC_SUMMARY orphan row(s)...", n_new_row))
+    src <- boundaries$s[orphan_src]
+    orphan_rows <- df[src, , drop = FALSE]
+    orphan_rows$datatype        <- "ACC_SUMMARY"
+    orphan_rows[, all_num_cols] <- stat_mat[orphan_src, , drop = FALSE]
+    orphan_rows$acc_burst_type   <- type_vec[orphan_src]
+    orphan_rows$gps_to_burst_sec <- NA_real_
+
+    out <- rbind(out, orphan_rows)
+    ord <- order(c(kept_orig, src), method = "radix")
+    out <- out[ord, , drop = FALSE]
   }
+  rownames(out) <- NULL
 
   if (verbose) {
     message("\n--- ACC Burst Analysis Summary ---")
@@ -361,66 +331,87 @@ analyze_acc <- function(df,
 # ==============================================================================
 
 #' @noRd
-.acc_bounds_v2 <- function(df) {
-  is_start <- grepl("^SEN_ACC_[0-9]+[Hh]z_START$", df$datatype)
-  is_end   <- grepl("^SEN_ACC_[0-9]+[Hh]z_END$",   df$datatype)
-  is_acc   <- grepl("^SEN_ACC_[0-9]+[Hh]z",         df$datatype)
-  start_idx <- which(is_start)
-  end_idx   <- which(is_end)
+#' V2 boundaries. Each START is paired with the first END that follows it and
+#' precedes the next START. findInterval() resolves all bursts in one binary
+#' search instead of rescanning the END vector for every burst.
+.acc_bounds_v2 <- function(n_row, cls, tag_vec = NULL) {
+  start_idx <- which(cls$acc_start)
+  end_idx   <- which(cls$acc_end)
+  acc_idx   <- which(cls$acc_any)
+
   if (!length(start_idx))
-    return(data.frame(s=integer(),e=integer(),type=character(),
-                      truncated=logical(),stringsAsFactors=FALSE))
-  n_b       <- length(start_idx)
-  next_start <- c(start_idx[-1L], nrow(df)+1L)
-  e_vec  <- integer(n_b)
-  trunc_v <- logical(n_b)
-  has_tags <- "tag_name" %in% names(df)
-  for (b in seq_len(n_b)) {
-    s_tag <- if (has_tags) df$tag_name[start_idx[b]] else NULL
-    if (has_tags) {
-      cands <- end_idx[end_idx > start_idx[b] & end_idx < next_start[b] &
-                       df$tag_name[end_idx] == s_tag]
-    } else {
-      cands <- end_idx[end_idx > start_idx[b] & end_idx < next_start[b]]
-    }
-    if (length(cands)) { e_vec[b] <- cands[1L]; trunc_v[b] <- FALSE
-    } else {
-      if (has_tags) {
-        aw <- which(is_acc & seq_len(nrow(df)) >= start_idx[b] &
-                      seq_len(nrow(df)) < next_start[b] &
-                      df$tag_name == s_tag)
-      } else {
-        aw <- which(is_acc & seq_len(nrow(df)) >= start_idx[b] &
-                      seq_len(nrow(df)) < next_start[b])
+    return(data.frame(s=integer(), e=integer(), type=character(),
+                      truncated=logical(), stringsAsFactors=FALSE))
+
+  n_b        <- length(start_idx)
+  next_start <- c(start_idx[-1L], n_row + 1L)
+
+  # First END strictly after each START
+  pos      <- findInterval(start_idx, end_idx) + 1L
+  in_range <- pos <= length(end_idx)
+  cand_end <- rep(NA_integer_, n_b)
+  if (any(in_range)) cand_end[in_range] <- end_idx[pos[in_range]]
+
+  ok <- !is.na(cand_end) & cand_end < next_start
+  if (!is.null(tag_vec) && any(ok))
+    ok[ok] <- tag_vec[cand_end[ok]] == tag_vec[start_idx[ok]]
+
+  e_vec     <- integer(n_b)
+  e_vec[ok] <- cand_end[ok]
+
+  # Truncated bursts (no END): last ACC row before the next START
+  if (any(!ok)) {
+    s_bad    <- start_idx[!ok]
+    n_bad    <- next_start[!ok]
+    k        <- findInterval(n_bad - 1L, acc_idx)
+    last_acc <- ifelse(k > 0L, acc_idx[pmax(k, 1L)], s_bad)
+    last_acc <- pmax(last_acc, s_bad)
+
+    # Rare: last ACC row in the window belongs to another individual —
+    # fall back to a bounded scan for just those bursts.
+    if (!is.null(tag_vec)) {
+      bad <- which(tag_vec[last_acc] != tag_vec[s_bad])
+      for (j in bad) {
+        w <- acc_idx[acc_idx >= s_bad[j] & acc_idx < n_bad[j] &
+                       tag_vec[acc_idx] == tag_vec[s_bad[j]]]
+        last_acc[j] <- if (length(w)) max(w) else s_bad[j]
       }
-      e_vec[b]   <- if(length(aw)) max(aw) else start_idx[b]
-      trunc_v[b] <- TRUE
     }
+    e_vec[!ok] <- last_acc
   }
-  data.frame(s=start_idx, e=e_vec,
-             type=sub("_START$","",df$datatype[start_idx],ignore.case=TRUE),
-             truncated=trunc_v, stringsAsFactors=FALSE)
+
+  data.frame(
+    s         = start_idx,
+    e         = e_vec,
+    type      = sub("_START$", "", cls$dt[start_idx]),
+    truncated = !ok,
+    stringsAsFactors = FALSE
+  )
 }
 
 
 #' @noRd
-.acc_bounds_v1 <- function(df, gap_sec=5) {
-  sensor_idx <- which(df$datatype == "SENSORS")
+#' V1 boundaries: consecutive SENSORS rows separated by more than gap_sec
+#' start a new burst.
+.acc_bounds_v1 <- function(sensor_idx, ts_num, gap_sec = 5) {
   if (!length(sensor_idx))
-    return(data.frame(s=integer(),e=integer(),type=character(),
-                      truncated=logical(),stringsAsFactors=FALSE))
-  ts_num  <- as.numeric(df$UTC_precise[sensor_idx])
-  gaps    <- c(diff(ts_num), Inf)
-  new_grp <- gaps > gap_sec | is.na(gaps)
-  grp_end   <- which(new_grp)
-  grp_start <- c(1L, grp_end[-length(grp_end)]+1L)
-  n_g <- length(grp_end)
+    return(data.frame(s=integer(), e=integer(), type=character(),
+                      truncated=logical(), stringsAsFactors=FALSE))
+
+  ts      <- ts_num[sensor_idx]
+  gaps    <- c(diff(ts), Inf)
+  grp_end <- which(gaps > gap_sec | is.na(gaps))
+  grp_beg <- c(1L, grp_end[-length(grp_end)] + 1L)
+  n_g     <- length(grp_end)
+
   types <- vapply(seq_len(n_g), function(i) {
-    ivl <- diff(ts_num[grp_start[i]:grp_end[i]])
-    ivl <- ivl[ivl>0 & !is.na(ivl)]
-    hz  <- if(length(ivl)) round(1/stats::median(ivl)) else NA_real_
-    if(!is.na(hz)) paste0("SEN_ACC_",hz,"Hz") else "SEN_ACC_SENSORS"
+    ivl <- diff(ts[grp_beg[i]:grp_end[i]])
+    ivl <- ivl[ivl > 0 & !is.na(ivl)]
+    hz  <- if (length(ivl)) round(1 / stats::median(ivl)) else NA_real_
+    if (!is.na(hz)) paste0("SEN_ACC_", hz, "Hz") else "SEN_ACC_SENSORS"
   }, character(1))
-  data.frame(s=sensor_idx[grp_start], e=sensor_idx[grp_end],
-             type=types, truncated=rep(FALSE,n_g), stringsAsFactors=FALSE)
+
+  data.frame(s = sensor_idx[grp_beg], e = sensor_idx[grp_end],
+             type = types, truncated = rep(FALSE, n_g),
+             stringsAsFactors = FALSE)
 }

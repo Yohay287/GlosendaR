@@ -84,26 +84,20 @@ add_event_id <- function(df,
   # ── parse timestamps ──────────────────────────────────────────────────────
   # Prefer UTC_timestamp (sub-second precision) when available.
   # Handle POSIXct, numeric (epoch seconds), and character formats robustly.
-  .to_posixct <- function(x) {
-    if (inherits(x, "POSIXct")) return(as.POSIXct(as.numeric(x),
-                                                    origin = "1970-01-01",
-                                                    tz = "UTC"))
-    if (is.numeric(x))          return(as.POSIXct(x, origin = "1970-01-01",
-                                                    tz = "UTC"))
-    suppressWarnings(as.POSIXct(as.character(x), tz = "UTC"))
-  }
 
   if ("UTC_timestamp" %in% names(df)) {
     ts_raw <- df$UTC_timestamp
-    ts     <- .to_posixct(ts_raw)
+    ts     <- .gl_to_posix(ts_raw)
     bad    <- is.na(ts)
     if (any(bad))
-      ts[bad] <- .to_posixct(df[[timestamp_col]])[bad]
+      ts[bad] <- .gl_to_posix(df[[timestamp_col]][bad])
   } else {
-    ts <- .to_posixct(df[[timestamp_col]])
+    ts <- .gl_to_posix(df[[timestamp_col]])
   }
 
   ts_num <- as.numeric(ts)
+
+  .gl_check_order(df, ts_num, "add_event_id")
 
   # ── classify row types ────────────────────────────────────────────────────
   is_gps <- df$datatype %in% c("GPS", "GPS_ACC", "GPSF")

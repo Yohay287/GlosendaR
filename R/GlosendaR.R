@@ -438,7 +438,7 @@ glosendas_list_devices <- function(username, password,
   # Parse UTC_datetime (try multiple formats)
   dt_col <- grep("^UTC_datetime$", names(df), value = TRUE)[1]
   if (!is.na(dt_col)) {
-    df[[dt_col]] <- .gl_parse_datetime(df[[dt_col]])
+    df[[dt_col]] <- .gl_to_posix(df[[dt_col]])
   }
 
   # Put tag_name immediately after device_id
@@ -483,25 +483,7 @@ glosendas_list_devices <- function(username, password,
 
 #' @noRd
 #' Try multiple datetime formats (V1 and V2 differ in precision).
-.gl_parse_datetime <- function(x) {
-  formats <- c(
-    "%Y-%m-%d %H:%M:%S",   # V2: "2026-05-12 00:06:12"
-    "%Y-%m-%d %H:%M",      # fallback minute precision
-    "%d/%m/%Y %H:%M:%S",   # alternative locale
-    "%d/%m/%Y %H:%M"
-  )
-  result <- rep(as.POSIXct(NA, tz = "UTC"), length(x))
-  remaining <- seq_along(x)
-  for (fmt in formats) {
-    if (length(remaining) == 0) break
-    parsed <- suppressWarnings(
-      as.POSIXct(x[remaining], format = fmt, tz = "UTC"))
-    ok <- !is.na(parsed)
-    result[remaining[ok]] <- parsed[ok]
-    remaining <- remaining[!ok]
-  }
-  result
-}
+.gl_parse_datetime <- function(x) .gl_to_posix(x)
 
 
 #' @noRd
