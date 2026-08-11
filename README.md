@@ -327,12 +327,14 @@ report <- attr(df, "gps_time_repairs")
 subset(report, !repaired)          # cases needing a manual look
 ```
 
-**Two kinds of fault, two repairs.** The report's `method` column says which was used:
+**Corrections only ever move forward.** A corrupted reading is one whose seconds field failed to increment, so the recorded time is always *behind* the true one. No fix is ever moved to an earlier time. The replacement is the smallest forward value that restores a strictly increasing sequence:
 
-- `reordered` — the recorded timestamps are all valid and simply written in the wrong order (`39, 41, 40, 43`). They are put back in sequence, so nothing is invented and the shifts are ±1 s.
-- `inferred` — the recorded value duplicates one already in the sequence (`08, 09, 10, 09`), so it cannot be reordered and the correct time (`11`) is interpolated from the neighbours.
+```
+recorded   34, 41, 40, 43, 42, 45, 44, 47
+repaired   34, 41, 42, 43, 44, 45, 46, 47      +2 s on three rows
+```
 
-Reordering is always preferred, because reusing a recorded value is better evidenced than inventing one.
+Setting `forward_only = FALSE` additionally allows a transposition to be repaired by swapping two recorded timestamps back into order (shifts of ±1 s). That is off by default because it moves a fix backwards in time.
 
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence's own sampling rate when the run ends before recovering.
 
@@ -342,6 +344,7 @@ Reordering is always preferred, because reusing a recorded value is better evide
 |-----------|-------------|---------|
 | `max_jump_m` | Max distance (m) to adjacent fixes for a repair to be accepted | `1000` |
 | `max_gap_sec` | Only inspect inversions inside a fix sequence this tight | `60` |
+| `forward_only` | Never move a timestamp to an earlier time | `TRUE` |
 | `update_cols` | Write repaired times back into all time columns | `TRUE` |
 
 Run it before `detect_gps_burst()` so that burst detection sees a clean, monotone time series.
@@ -509,12 +512,14 @@ report <- attr(df, "gps_time_repairs")
 subset(report, !repaired)          # cases needing a manual look
 ```
 
-**Two kinds of fault, two repairs.** The report's `method` column says which was used:
+**Corrections only ever move forward.** A corrupted reading is one whose seconds field failed to increment, so the recorded time is always *behind* the true one. No fix is ever moved to an earlier time. The replacement is the smallest forward value that restores a strictly increasing sequence:
 
-- `reordered` — the recorded timestamps are all valid and simply written in the wrong order (`39, 41, 40, 43`). They are put back in sequence, so nothing is invented and the shifts are ±1 s.
-- `inferred` — the recorded value duplicates one already in the sequence (`08, 09, 10, 09`), so it cannot be reordered and the correct time (`11`) is interpolated from the neighbours.
+```
+recorded   34, 41, 40, 43, 42, 45, 44, 47
+repaired   34, 41, 42, 43, 44, 45, 46, 47      +2 s on three rows
+```
 
-Reordering is always preferred, because reusing a recorded value is better evidenced than inventing one.
+Setting `forward_only = FALSE` additionally allows a transposition to be repaired by swapping two recorded timestamps back into order (shifts of ±1 s). That is off by default because it moves a fix backwards in time.
 
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence own sampling rate when the run ends before recovering.
 
@@ -524,6 +529,7 @@ Reordering is always preferred, because reusing a recorded value is better evide
 |-----------|-------------|---------|
 | `max_jump_m` | Max distance (m) to adjacent fixes for a repair to be accepted | `1000` |
 | `max_gap_sec` | Only inspect inversions inside a fix sequence this tight | `60` |
+| `forward_only` | Never move a timestamp to an earlier time | `TRUE` |
 | `update_cols` | Write repaired times back into all time columns | `TRUE` |
 
 Run it before `detect_gps_burst()` so that burst detection sees a clean, monotone time series.

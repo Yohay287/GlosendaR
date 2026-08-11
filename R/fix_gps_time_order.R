@@ -33,6 +33,11 @@
 #' @param max_gap_sec Numeric. Only inspect inversions inside a fix sequence
 #'   where neighbouring fixes are at most this many seconds apart, i.e. within a
 #'   GPS burst rather than across a long gap. Default: \code{60}.
+#' @param forward_only Logical. Only ever move a timestamp \emph{forward}.
+#'   A corrupted reading arises when the clock's seconds field fails to
+#'   increment, so the recorded time is always behind the true one and a
+#'   correction can only be an advance. Leaving this \code{TRUE} (the default)
+#'   guarantees no fix is ever moved to an earlier time. Default: \code{TRUE}.
 #' @param update_cols Logical. Write the repaired times back into every time
 #'   column present (\code{UTC_timestamp}, \code{UTC_datetime}, \code{UTC_date},
 #'   \code{UTC_time}, \code{milliseconds}). When \code{FALSE} the data frame is
@@ -71,6 +76,7 @@
 fix_gps_time_order <- function(df,
                                max_jump_m    = 1000,
                                max_gap_sec   = 60,
+                               forward_only  = TRUE,
                                update_cols   = TRUE,
                                verbose       = TRUE) {
 
@@ -144,6 +150,9 @@ fix_gps_time_order <- function(df,
         if (a > 1L && !is.na(t[a - 1L]) && sv[1] <= t[a - 1L]) next
         if (b < length(t) && !is.na(t[b + 1L]) && sv[length(sv)] >= t[b + 1L]) next
         if (max(sv) - min(sv) > max_gap_sec) next          # not one sequence
+        # A reordering necessarily moves at least one timestamp backwards.
+        # Under forward_only that is not an admissible repair.
+        if (forward_only && any(sv < vals)) next
         win <- a:b; newv <- sv; method <- "reordered"
         break
       }

@@ -596,21 +596,33 @@ test_that("fix_gps_time_order ignores the GPS-to-ACC acquisition lag", {
   expect_equal(nrow(attr(out, "gps_time_repairs")), 0L)
 })
 
-test_that("fix_gps_time_order prefers reordering recorded times over inventing one", {
-  # 39, 41, 40, 43 — the recorded values are all valid, only two are swapped.
-  # The correct repair reuses them (-1 / +1), rather than inventing 42.
-  d <- .mk_gps(c(39, 41, 40, 43), 30.7 + (0:3) * 1e-5)
+test_that("fix_gps_time_order only ever moves a timestamp forward", {
+  # A corrupted reading is one whose seconds field failed to increment, so it
+  # is always behind the true time. No repair may move a fix earlier.
+  d <- .mk_gps(c(34, 41, 40, 43, 42, 45, 44, 47), 30.7 + (0:7) * 1e-5)
   out <- fix_gps_time_order(d, verbose = FALSE)
   rep <- attr(out, "gps_time_repairs")
 
-  expect_equal(nrow(rep), 2L)
+  expect_true(all(rep$shift_sec > 0))
+  expect_equal(rep$shift_sec, c(2, 2, 2))
+
+  ts <- as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC"))
+  old <- as.numeric(as.POSIXct(d$UTC_timestamp, tz = "UTC"))
+  expect_true(all(ts >= old))                       # nothing moved earlier
+  expect_false(is.unsorted(ts, strictly = TRUE))
+})
+
+test_that("reordering is available only when forward_only is switched off", {
+  d <- .mk_gps(c(39, 41, 40, 43), 30.7 + (0:3) * 1e-5)
+
+  fwd <- fix_gps_time_order(d, verbose = FALSE)
+  expect_true(all(attr(fwd, "gps_time_repairs")$shift_sec > 0))
+  expect_true(all(attr(fwd, "gps_time_repairs")$method == "inferred"))
+
+  both <- fix_gps_time_order(d, forward_only = FALSE, verbose = FALSE)
+  rep  <- attr(both, "gps_time_repairs")
   expect_true(all(rep$method == "reordered"))
   expect_setequal(rep$shift_sec, c(-1, 1))
-
-  # the repaired sequence uses exactly the recorded values
-  ts <- as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC"))
-  expect_equal(sort(ts), sort(as.numeric(as.POSIXct(d$UTC_timestamp, tz = "UTC"))))
-  expect_false(is.unsorted(ts, strictly = TRUE))
 })
 
 test_that("fix_gps_time_order infers a new time when the recorded value duplicates", {
@@ -627,15 +639,12 @@ test_that("fix_gps_time_order infers a new time when the recorded value duplicat
   expect_false(is.unsorted(ts, strictly = TRUE))
 })
 
-test_that("reordering improves the coordinate/time alignment, never degrades it", {
-  # Rows advance smoothly east; two timestamps are written the wrong way round.
-  # Sorting by time BEFORE the repair visits the positions out of order and
-  # lengthens the reconstructed path; after the repair it follows row order.
-  d <- .mk_gps(c(0, 2, 1, 3), 30.7, 34.4 + (0:3) * 1e-4)
+test_that("repair improves the coordinate/time alignment, never degrades it", {
+  # Rows advance smoothly east; one timestamp is corrupt. Sorting by time
+  # BEFORE the repair visits the positions out of order and lengthens the
+  # reconstructed path; after the repair it follows row order.
+  d <- .mk_gps(c(0, 2, 1, 4), 30.7, 34.4 + (0:3) * 1e-4)
   out <- fix_gps_time_order(d, verbose = FALSE)
-  rep <- attr(out, "gps_time_repairs")
-  expect_true(all(rep$method == "reordered"))
-
   path <- function(src) {
     o  <- order(as.numeric(as.POSIXct(src$UTC_timestamp, tz = "UTC")))
     la <- src$Latitude[o]; lo <- src$Longitude[o]; n <- length(la)
