@@ -595,3 +595,58 @@ test_that("fix_gps_time_order ignores the GPS-to-ACC acquisition lag", {
   out <- fix_gps_time_order(d, verbose = FALSE)
   expect_equal(nrow(attr(out, "gps_time_repairs")), 0L)
 })
+
+test_that("fix_gps_time_order prefers reordering recorded times over inventing one", {
+  # 39, 41, 40, 43 — the recorded values are all valid, only two are swapped.
+  # The correct repair reuses them (-1 / +1), rather than inventing 42.
+  d <- .mk_gps(c(39, 41, 40, 43), 30.7 + (0:3) * 1e-5)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_equal(nrow(rep), 2L)
+  expect_true(all(rep$method == "reordered"))
+  expect_setequal(rep$shift_sec, c(-1, 1))
+
+  # the repaired sequence uses exactly the recorded values
+  ts <- as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC"))
+  expect_equal(sort(ts), sort(as.numeric(as.POSIXct(d$UTC_timestamp, tz = "UTC"))))
+  expect_false(is.unsorted(ts, strictly = TRUE))
+})
+
+test_that("fix_gps_time_order infers a new time when the recorded value duplicates", {
+  # 08, 09, 10, 09 — sorting would leave two 09s, so 11 has to be inferred
+  d <- .mk_gps(c(8, 9, 10, 9, 12), 30.7 + (0:4) * 1e-5)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_equal(nrow(rep), 1L)
+  expect_equal(rep$method, "inferred")
+  expect_equal(rep$shift_sec, 2)
+
+  ts <- as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC"))
+  expect_false(is.unsorted(ts, strictly = TRUE))
+})
+
+test_that("reordering improves the coordinate/time alignment, never degrades it", {
+  # Rows advance smoothly east; two timestamps are written the wrong way round.
+  # Sorting by time BEFORE the repair visits the positions out of order and
+  # lengthens the reconstructed path; after the repair it follows row order.
+  d <- .mk_gps(c(0, 2, 1, 3), 30.7, 34.4 + (0:3) * 1e-4)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+  expect_true(all(rep$method == "reordered"))
+
+  path <- function(src) {
+    o  <- order(as.numeric(as.POSIXct(src$UTC_timestamp, tz = "UTC")))
+    la <- src$Latitude[o]; lo <- src$Longitude[o]; n <- length(la)
+    p  <- pi / 180
+    sum(2 * 6371000 * asin(pmin(1, sqrt(
+      sin((la[-1] - la[-n]) * p / 2)^2 +
+      cos(la[-n] * p) * cos(la[-1] * p) * sin((lo[-1] - lo[-n]) * p / 2)^2))))
+  }
+  expect_lt(path(out), path(d))
+
+  # after the repair, time order and row order agree
+  expect_false(is.unsorted(
+    as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC")), strictly = TRUE))
+})

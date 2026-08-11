@@ -113,7 +113,7 @@ fix_gps_time_order <- function(df,
   ts_fixed <- ts_num
   rep_rows <- integer(0); rep_old <- rep_new <- numeric(0)
   rep_dp <- rep_dn <- rep_spd <- numeric(0)
-  rep_ok <- logical(0);  rep_why <- character(0)
+  rep_ok <- logical(0);  rep_why <- character(0); rep_how <- character(0)
 
   for (r in unique(run)) {
     ridx <- gps_idx[run == r]
@@ -125,37 +125,63 @@ fix_gps_time_order <- function(df,
     while (j <= length(t)) {
       if (is.na(t[j]) || is.na(t[j - 1L]) || t[j] > t[j - 1L]) { j <- j + 1L; next }
 
-      # Find the next timestamp that is genuinely ahead of t[j-1]
-      k <- j + 1L
-      while (k <= length(t) && (is.na(t[k]) || t[k] <= t[j - 1L])) k <- k + 1L
+      # ── 1. Can the recorded values simply be put back in order? ─────────────
+      # A common fault is a transposition: the tag wrote two neighbouring
+      # timestamps the wrong way round. The recorded values are then all
+      # correct and only their assignment to rows is wrong, so reordering them
+      # repairs the sequence without inventing any time. This is preferred
+      # whenever it works, because it is the smaller and better-evidenced
+      # correction.
+      a      <- j - 1L
+      method <- NA_character_
+      win    <- integer(0); newv <- numeric(0)
 
-      lo <- t[j - 1L]
-      # Typical sampling step of this run. Only gaps short enough to be inside
-      # a burst count: a run can also contain long routine-schedule gaps, and
-      # those would otherwise dominate the median.
-      d_ok <- diff(t[seq_len(j - 1L)])
-      d_ok <- d_ok[d_ok > 0 & d_ok <= max_gap_sec]
-      step <- if (length(d_ok)) stats::median(d_ok, na.rm = TRUE) else NA_real_
-
-      # Interpolate only when the next sound fix is close enough in time to
-      # belong to the same sequence; otherwise carry on at the usual step.
-      if (k <= length(t) && !is.na(t[k]) && (t[k] - lo) <= max_gap_sec) {
-        hi   <- t[k]
-        span <- k - (j - 1L)                       # steps to fill
-        newt <- lo + (hi - lo) * seq_len(span - 1L) / span
-        inferable <- TRUE
-      } else {
-        k <- min(k, length(t) + 1L)
-        inferable <- is.finite(step) && step > 0
-        newt <- if (inferable) lo + step * seq_len(k - j)
-                else rep(NA_real_, k - j)
+      for (b in j:min(j + 3L, length(t))) {
+        vals <- t[a:b]
+        if (anyNA(vals)) next
+        sv <- sort(vals)
+        if (any(diff(sv) <= 0)) next                       # would leave ties
+        if (a > 1L && !is.na(t[a - 1L]) && sv[1] <= t[a - 1L]) next
+        if (b < length(t) && !is.na(t[b + 1L]) && sv[length(sv)] >= t[b + 1L]) next
+        if (max(sv) - min(sv) > max_gap_sec) next          # not one sequence
+        win <- a:b; newv <- sv; method <- "reordered"
+        break
       }
 
-      bad_local <- j:(k - 1L)
-      for (m in seq_along(bad_local)) {
-        p   <- bad_local[m]
+      # ── 2. Otherwise infer the missing time ────────────────────────────────
+      if (is.na(method)) {
+        # Find the next timestamp that is genuinely ahead of t[j-1]
+        k <- j + 1L
+        while (k <= length(t) && (is.na(t[k]) || t[k] <= t[j - 1L])) k <- k + 1L
+
+        lo <- t[j - 1L]
+        # Typical sampling step of this run. Only gaps short enough to be
+        # inside a burst count: a run can also contain long routine-schedule
+        # gaps, and those would otherwise dominate the median.
+        d_ok <- diff(t[seq_len(j - 1L)])
+        d_ok <- d_ok[d_ok > 0 & d_ok <= max_gap_sec]
+        step <- if (length(d_ok)) stats::median(d_ok, na.rm = TRUE) else NA_real_
+
+        # Interpolate only when the next sound fix is close enough in time to
+        # belong to the same sequence; otherwise carry on at the usual step.
+        if (k <= length(t) && !is.na(t[k]) && (t[k] - lo) <= max_gap_sec) {
+          hi   <- t[k]
+          span <- k - (j - 1L)                       # steps to fill
+          newv <- lo + (hi - lo) * seq_len(span - 1L) / span
+        } else {
+          k    <- min(k, length(t) + 1L)
+          newv <- if (is.finite(step) && step > 0) lo + step * seq_len(k - j)
+                  else rep(NA_real_, k - j)
+        }
+        win    <- j:(k - 1L)
+        method <- "inferred"
+      }
+
+      changed <- which(newv != t[win] | (is.na(newv) & !is.na(t[win])))
+      for (m in changed) {
+        p   <- win[m]
         row <- ridx[p]
-        nt  <- newt[m]
+        nt  <- newv[m]
 
         # Verify from the coordinates that this really is only a clock fault.
         # A neighbouring fix is only informative about continuity if it is
@@ -165,16 +191,17 @@ fix_gps_time_order <- function(df,
           ok  <- FALSE
           why <- "no neighbouring fix close enough to infer the time from"
         } else if (has_xy && !is.na(lat[row]) && !is.na(lon[row])) {
-          prow  <- ridx[p - 1L]
+          prow  <- if (p > 1L) ridx[p - 1L] else NA_integer_
           nrow_ <- if (p < length(t)) ridx[p + 1L] else NA_integer_
 
-          dt_p <- nt - ts_fixed[prow]
+          dt_p <- if (!is.na(prow)) nt - ts_fixed[prow] else NA_real_
           dt_n <- if (!is.na(nrow_)) ts_fixed[nrow_] - nt else NA_real_
 
-          if (!is.na(lat[prow]) && !is.na(dt_p) && dt_p <= max_gap_sec)
+          if (!is.na(prow) && !is.na(lat[prow]) &&
+              !is.na(dt_p) && abs(dt_p) <= max_gap_sec)
             dp <- .gl_haversine_m(lat[prow], lon[prow], lat[row], lon[row])
           if (!is.na(nrow_) && !is.na(lat[nrow_]) &&
-              !is.na(dt_n) && dt_n <= max_gap_sec)
+              !is.na(dt_n) && abs(dt_n) <= max_gap_sec)
             dn <- .gl_haversine_m(lat[row], lon[row], lat[nrow_], lon[nrow_])
 
           s1 <- if (!is.na(dp) && !is.na(dt_p) && dt_p > 0) dp / dt_p * 3.6 else NA_real_
@@ -197,10 +224,12 @@ fix_gps_time_order <- function(df,
         rep_spd  <- c(rep_spd,  spd)
         rep_ok   <- c(rep_ok,   ok)
         rep_why  <- c(rep_why,  why)
+        rep_how  <- c(rep_how,  method)
 
         if (ok) { t[p] <- nt; ts_fixed[row] <- nt }
       }
-      j <- k
+      # Continue after the window just handled; always advance at least one row
+      j <- max(win[length(win)] + 1L, j + 1L)
     }
   }
 
@@ -213,6 +242,7 @@ fix_gps_time_order <- function(df,
     dist_prev_m   = round(rep_dp, 1),
     dist_next_m   = round(rep_dn, 1),
     max_speed_kmh = round(rep_spd, 1),
+    method        = rep_how,
     repaired      = rep_ok,
     reason        = rep_why,
     stringsAsFactors = FALSE
@@ -298,7 +328,7 @@ fix_gps_time_order <- function(df,
              old_time = .gl_posix(numeric()), new_time = .gl_posix(numeric()),
              shift_sec = numeric(), dist_prev_m = numeric(),
              dist_next_m = numeric(), max_speed_kmh = numeric(),
-             repaired = logical(), reason = character(),
+             method = character(), repaired = logical(), reason = character(),
              stringsAsFactors = FALSE)
 }
 

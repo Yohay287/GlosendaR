@@ -327,6 +327,13 @@ report <- attr(df, "gps_time_repairs")
 subset(report, !repaired)          # cases needing a manual look
 ```
 
+**Two kinds of fault, two repairs.** The report's `method` column says which was used:
+
+- `reordered` — the recorded timestamps are all valid and simply written in the wrong order (`39, 41, 40, 43`). They are put back in sequence, so nothing is invented and the shifts are ±1 s.
+- `inferred` — the recorded value duplicates one already in the sequence (`08, 09, 10, 09`), so it cannot be reordered and the correct time (`11`) is interpolated from the neighbours.
+
+Reordering is always preferred, because reusing a recorded value is better evidenced than inventing one.
+
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence's own sampling rate when the run ends before recovering.
 
 **What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
@@ -501,6 +508,13 @@ df     <- fix_gps_time_order(df)
 report <- attr(df, "gps_time_repairs")
 subset(report, !repaired)          # cases needing a manual look
 ```
+
+**Two kinds of fault, two repairs.** The report's `method` column says which was used:
+
+- `reordered` — the recorded timestamps are all valid and simply written in the wrong order (`39, 41, 40, 43`). They are put back in sequence, so nothing is invented and the shifts are ±1 s.
+- `inferred` — the recorded value duplicates one already in the sequence (`08, 09, 10, 09`), so it cannot be reordered and the correct time (`11`) is interpolated from the neighbours.
+
+Reordering is always preferred, because reusing a recorded value is better evidenced than inventing one.
 
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence own sampling rate when the run ends before recovering.
 
