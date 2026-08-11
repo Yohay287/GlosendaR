@@ -494,3 +494,104 @@ test_that("empty and single-row inputs are rejected cleanly", {
   expect_error(analyze_acc(raw[0, ], verbose = FALSE), "zero rows")
   expect_error(add_event_id(raw[0, ], verbose = FALSE), "zero rows")
 })
+
+
+# ===========================================================================
+# fix_gps_time_order()
+# ===========================================================================
+.mk_gps <- function(secs, lats, lons = 34.4, tag = "T") {
+  base <- as.POSIXct("2026-01-01 10:00:00", tz = "UTC")
+  ts   <- base + secs
+  data.frame(
+    tag_name      = tag,
+    datatype      = "GPS",
+    UTC_datetime  = ts,
+    UTC_timestamp = format(ts, "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+    UTC_time      = format(ts, "%H:%M:%S", tz = "UTC"),
+    Latitude      = lats,
+    Longitude     = lons,
+    milliseconds  = 0,
+    stringsAsFactors = FALSE)
+}
+
+test_that("fix_gps_time_order leaves clean data untouched", {
+  d <- .mk_gps(0:5, 30.7 + (0:5) * 1e-4)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  expect_equal(nrow(attr(out, "gps_time_repairs")), 0L)
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)
+})
+
+test_that("fix_gps_time_order repairs a clock fault with continuous positions", {
+  d <- .mk_gps(c(0, 1, 2, 1, 4, 5), 30.7 + (0:5) * 1e-4)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_equal(nrow(rep), 1L)
+  expect_true(rep$repaired)
+  expect_equal(rep$row, 4L)
+  expect_equal(as.numeric(rep$new_time) - as.numeric(rep$old_time), 2)
+
+  # timestamps must now be strictly increasing
+  ts <- as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC"))
+  expect_false(is.unsorted(ts, strictly = TRUE))
+})
+
+test_that("fix_gps_time_order refuses to repair when the position also jumps", {
+  d <- .mk_gps(c(0, 1, 2, 1, 4, 5),
+               c(30.7, 30.7001, 30.7002, 33.8, 30.7004, 30.7005))
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_equal(nrow(rep), 1L)
+  expect_false(rep$repaired)
+  expect_true(grepl("position jumps", rep$reason))
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)   # untouched
+})
+
+test_that("fix_gps_time_order never reorders rows or alters coordinates", {
+  d <- .mk_gps(c(0, 1, 2, 1, 4, 5), 30.7 + (0:5) * 1e-4)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  expect_equal(nrow(out), nrow(d))
+  expect_equal(out$Latitude,  d$Latitude)
+  expect_equal(out$Longitude, d$Longitude)
+  expect_equal(out$datatype,  d$datatype)
+})
+
+test_that("fix_gps_time_order keeps individuals separate", {
+  a <- .mk_gps(0:3, 30.7 + (0:3) * 1e-4, tag = "A")
+  b <- .mk_gps(0:3, 31.7 + (0:3) * 1e-4, tag = "B")
+  out <- fix_gps_time_order(rbind(a, b), verbose = FALSE)
+  # B restarting the clock is a tag change, not a fault
+  expect_equal(nrow(attr(out, "gps_time_repairs")), 0L)
+})
+
+test_that("fix_gps_time_order update_cols = FALSE reports without changing data", {
+  d <- .mk_gps(c(0, 1, 2, 1, 4, 5), 30.7 + (0:5) * 1e-4)
+  out <- fix_gps_time_order(d, update_cols = FALSE, verbose = FALSE)
+  expect_equal(nrow(attr(out, "gps_time_repairs")), 1L)
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)
+})
+
+test_that("fix_gps_time_order keeps all time columns consistent", {
+  d <- .mk_gps(c(0, 1, 2, 1, 4, 5), 30.7 + (0:5) * 1e-4)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  i <- attr(out, "gps_time_repairs")$row
+  expect_equal(substr(out$UTC_timestamp[i], 12, 19), out$UTC_time[i])
+  expect_equal(as.numeric(as.POSIXct(out$UTC_datetime[i], tz = "UTC")),
+               as.numeric(as.POSIXct(out$UTC_timestamp[i], tz = "UTC")))
+})
+
+test_that("fix_gps_time_order ignores the GPS-to-ACC acquisition lag", {
+  base <- as.POSIXct("2026-01-01 10:00:00", tz = "UTC")
+  ts   <- c(base + 0.9, base + (0:4) * 0.1)   # GPS stamped after ACC_START
+  d <- data.frame(
+    tag_name = "T",
+    datatype = c("GPS", "SEN_ACC_10Hz_START", rep("SEN_ACC_10Hz", 3), "SEN_ACC_10Hz_END"),
+    UTC_datetime  = ts,
+    UTC_timestamp = format(ts, "%Y-%m-%d %H:%M:%OS3", tz = "UTC"),
+    Latitude = c(30.7, NA, NA, NA, NA, NA),
+    Longitude = c(34.4, NA, NA, NA, NA, NA),
+    stringsAsFactors = FALSE)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  expect_equal(nrow(attr(out, "gps_time_repairs")), 0L)
+})

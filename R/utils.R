@@ -41,8 +41,14 @@
 #' implementation prevents the same value parsing in one function and failing
 #' in another.
 .gl_to_posix <- function(x) {
-  if (inherits(x, "POSIXct"))
-    return(as.POSIXct(as.numeric(x), origin = "1970-01-01", tz = "UTC"))
+  # A POSIXct must be numeric underneath. Objects saved by some pipelines carry
+  # the POSIXct class over character storage; as.numeric() would silently turn
+  # every value into NA, so the strings are re-parsed instead.
+  if (inherits(x, "POSIXct")) {
+    if (is.numeric(unclass(x)))
+      return(as.POSIXct(as.numeric(x), origin = "1970-01-01", tz = "UTC"))
+    x <- unclass(x)   # fall through to the character branch below
+  }
   if (inherits(x, "Date"))
     return(as.POSIXct(as.numeric(x) * 86400, origin = "1970-01-01", tz = "UTC"))
   if (is.numeric(x))

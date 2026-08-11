@@ -303,6 +303,45 @@ All original columns are preserved. ACC rows without coordinates inherit all new
 
 ---
 
+### `fix_gps_time_order()`
+
+Repairs corrupted timestamps inside GPS sequences. Some tags occasionally write a bad timestamp, so the recorded time steps backwards even though the fixes themselves are sound:
+
+```
+19:20:08   lon 34.471325
+19:20:09   lon 34.471455
+19:20:10   lon 34.471592
+19:20:09   lon 34.471638   <- time goes back; position keeps advancing
+19:20:12   lon 34.471958
+```
+
+The position moves smoothly throughout, so the row order is correct and only the clock is wrong — that row should read `19:20:11`.
+
+```r
+# Inspect first, without changing anything
+invisible(fix_gps_time_order(df, update_cols = FALSE))
+
+# Repair, then review what changed
+df     <- fix_gps_time_order(df)
+report <- attr(df, "gps_time_repairs")
+subset(report, !repaired)          # cases needing a manual look
+```
+
+**How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence's own sampling rate when the run ends before recovering.
+
+**What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `max_jump_m` | Max distance (m) to adjacent fixes for a repair to be accepted | `1000` |
+| `max_gap_sec` | Only inspect inversions inside a fix sequence this tight | `60` |
+| `update_cols` | Write repaired times back into all time columns | `TRUE` |
+
+Run it before `detect_gps_burst()` so that burst detection sees a clean, monotone time series.
+
+
+---
+
 ## Working with the Data
 
 ```r
@@ -435,4 +474,43 @@ gps_df <- analyze_acc(df, advanced = TRUE)
 |-----------|-------------|---------|
 | `adj_gps_max_min` | Max minutes the GPS fix can be before **or** after the burst start time (GPS must be exactly one row before `ACC_START`) | `2` |
 
+
+
+---
+
+### `fix_gps_time_order()`
+
+Repairs corrupted timestamps inside GPS sequences. Some tags occasionally write a bad timestamp, so the recorded time steps backwards even though the fixes themselves are sound:
+
+```
+19:20:08   lon 34.471325
+19:20:09   lon 34.471455
+19:20:10   lon 34.471592
+19:20:09   lon 34.471638   <- time goes back; position keeps advancing
+19:20:12   lon 34.471958
+```
+
+The position moves smoothly throughout, so the row order is correct and only the clock is wrong — that row should read `19:20:11`.
+
+```r
+# Inspect first, without changing anything
+invisible(fix_gps_time_order(df, update_cols = FALSE))
+
+# Repair, then review what changed
+df     <- fix_gps_time_order(df)
+report <- attr(df, "gps_time_repairs")
+subset(report, !repaired)          # cases needing a manual look
+```
+
+**How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence own sampling rate when the run ends before recovering.
+
+**What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `max_jump_m` | Max distance (m) to adjacent fixes for a repair to be accepted | `1000` |
+| `max_gap_sec` | Only inspect inversions inside a fix sequence this tight | `60` |
+| `update_cols` | Write repaired times back into all time columns | `TRUE` |
+
+Run it before `detect_gps_burst()` so that burst detection sees a clean, monotone time series.
 

@@ -21,7 +21,11 @@ Description: Provides a simple interface to authenticate with the Glosendas
     converted to UTC — strings with embedded timezone labels such as 
     "2023-03-06 18:47 IST" or POSIXct objects in any timezone are accepted 
     and converted correctly. When saving CSV output, the specified output 
-    folder is created automatically if it does not already exist. All processing functions handle multi-individual 
+    folder is created automatically if it does not already exist. The 
+    fix_gps_time_order() function repairs corrupted timestamps inside GPS 
+    sequences, verifying from the coordinates that the fix sequence is 
+    continuous before rewriting a time, and leaving rows and coordinates 
+    untouched. All processing functions handle multi-individual 
     datasets correctly — tag boundaries are always respected so data from 
     different birds is never mixed. The add_day_id() function assigns daily identifiers using sunrise or 
     sunset at the GPS location (via the suncalc package), defined by a 
