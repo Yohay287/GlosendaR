@@ -836,3 +836,31 @@ test_that("the parsimony guard protects a burst even without coordinates", {
   expect_false(any(rep$repaired))
   expect_equal(out$UTC_timestamp, d$UTC_timestamp)
 })
+
+test_that("day_progress is filled before the first sunrise of the record", {
+  skip_if_not_installed("suncalc")
+  # A track starting just after midnight begins BEFORE that day's sunrise, so
+  # its first rows belong to the previous solar day — whose crossing is not in
+  # the data. Those rows must still receive a day_progress, not NA.
+  ts <- as.POSIXct("2022-03-10 00:01:00", tz = "UTC") + (0:47) * 900
+  d <- data.frame(
+    tag_name = "Kelach 3", datatype = "GPS",
+    UTC_datetime = ts,
+    UTC_timestamp = format(ts, "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+    Latitude = 30.91740, Longitude = 34.48173,
+    stringsAsFactors = FALSE)
+
+  out <- add_day_id(d, day_progress = TRUE, verbose = FALSE)
+
+  expect_equal(sum(is.na(out$day_progress)), 0L)
+  expect_true(all(out$day_progress >= 0 & out$day_progress <= 200))
+
+  # rows before sunrise belong to the previous day and sit late in its cycle
+  pre <- out$Day_ID == "Kelach 3_20220309"
+  expect_true(any(pre))
+  expect_true(all(out$day_progress[pre] > 100))
+
+  # and progress increases within each day
+  expect_true(all(tapply(seq_len(nrow(out)), out$Day_ID,
+                         function(i) !is.unsorted(out$day_progress[i]))))
+})

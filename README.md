@@ -296,6 +296,8 @@ df_day <- add_day_id(df_ev, add_sun_angle = TRUE, day_progress = TRUE)
 
 **Common `sun_angle` values:** `0` = geometric horizon, `-6` = civil twilight (default), `-12` = nautical twilight, `-18` = astronomical twilight.
 
+Rows recorded before the first crossing of the record — a track that starts just after midnight begins *before* that day's sunrise — belong to the previous solar day. That day's crossing is not in the data, so one extra day is computed at each end of every individual's track to anchor them. Without it those rows receive a `Day_ID` but no `day_progress`.
+
 **`day_progress` scale:** `0` = day start (sunrise/sunset), `100` = midpoint (sunset/sunrise), `200` = next day start.
 
 All original columns are preserved. ACC rows without coordinates inherit all new columns from the GPS row in the same event via `Event_ID`.

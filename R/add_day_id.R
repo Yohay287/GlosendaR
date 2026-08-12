@@ -125,6 +125,30 @@ add_day_id <- function(df,
   agg_lat   <- as.numeric(med_lat[unique_keys])
   agg_lon   <- as.numeric(med_lon[unique_keys])
 
+  # Rows recorded before the first crossing of the first day belong to the
+  # previous solar day, whose crossing is not in the data. Without an anchor
+  # for it those rows can be given a Day_ID but no day_progress, so one extra
+  # day is prepended per individual, using that individual's earliest known
+  # position. The same applies at the end of a track, where the following
+  # crossing is needed to close the last day.
+  pad_tag <- pad_date <- pad_lat <- pad_lon <- NULL
+  for (tg in unique(agg_tag)) {
+    k  <- which(agg_tag == tg)
+    i0 <- k[which.min(agg_date[k])]
+    i1 <- k[which.max(agg_date[k])]
+    pad_tag  <- c(pad_tag,  tg, tg)
+    pad_date <- c(pad_date, agg_date[i0] - 1L, agg_date[i1] + 1L)
+    pad_lat  <- c(pad_lat,  agg_lat[i0], agg_lat[i1])
+    pad_lon  <- c(pad_lon,  agg_lon[i0], agg_lon[i1])
+  }
+  if (length(pad_tag)) {
+    agg_tag  <- c(agg_tag,  pad_tag)
+    agg_date <- c(agg_date, as.Date(pad_date, origin = "1970-01-01"))
+    agg_lat  <- c(agg_lat,  pad_lat)
+    agg_lon  <- c(agg_lon,  pad_lon)
+    unique_keys <- c(unique_keys, paste(pad_tag, pad_date, sep = "__"))
+  }
+
   n_combos <- length(unique_keys)
   if (verbose)
     message(sprintf("Computing sun crossing times for %d tag-date combination(s)...",
