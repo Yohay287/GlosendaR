@@ -753,3 +753,86 @@ test_that("max_consecutive still allows short genuine runs to be repaired", {
   out <- fix_gps_time_order(d, verbose = FALSE)
   expect_true(all(attr(out, "gps_time_repairs")$repaired))
 })
+
+test_that("both coordinate sources work and agree: columns and sf geometry", {
+  skip_if_not_installed("sf")
+  d <- .mk_gps(c(34, 41, 40, 43, 42, 45, 44, 47), 30.93282 + (0:7) * 1e-5)
+
+  from_cols <- fix_gps_time_order(d, verbose = FALSE)
+  s <- sf::st_as_sf(d, coords = c("Longitude", "Latitude"), crs = 4326)
+  expect_false(any(c("Latitude", "Longitude") %in% names(s)))  # only geometry
+  from_geom <- fix_gps_time_order(s, verbose = FALSE)
+
+  # identical repairs from either source
+  expect_equal(from_cols$UTC_timestamp, from_geom$UTC_timestamp)
+  rc <- attr(from_cols, "gps_time_repairs")
+  rg <- attr(from_geom, "gps_time_repairs")
+  expect_equal(rc$row, rg$row)
+  expect_equal(rc$shift_sec, rg$shift_sec)
+
+  # the sf object survives intact
+  expect_true(inherits(from_geom, "sf"))
+  expect_equal(sf::st_crs(from_geom)$epsg, 4326L)
+  expect_equal(sf::st_coordinates(s), sf::st_coordinates(from_geom))
+})
+
+test_that("the position check runs off sf geometry alone", {
+  skip_if_not_installed("sf")
+  # a fix 21 km away can only be caught by a coordinate check
+  d <- .mk_gps(c(14.945, 10, 11, 12, 13, 14, 15, 16),
+               c(30.90232, rep(30.93282, 7)),
+               c(34.76187, rep(34.53975, 7)))
+  s <- sf::st_as_sf(d, coords = c("Longitude", "Latitude"), crs = 4326)
+  out <- fix_gps_time_order(s, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_false(any(rep$repaired))
+  expect_true(grepl("outlier", rep$reason[1]))
+  expect_gt(rep$dist_next_m[1], 20000)      # distance actually measured
+})
+
+test_that("fix_gps_time_order preserves a genuine sf / move2 class", {
+  skip_if_not_installed("sf")
+  d <- .mk_gps(c(34, 41, 40, 43, 42, 45, 44, 47), 30.93282 + (0:7) * 1e-5)
+  s <- sf::st_as_sf(d, coords = c("Longitude", "Latitude"), crs = 4326)
+  m <- s
+  class(m) <- c("move2", class(s))
+
+  out <- fix_gps_time_order(m, verbose = FALSE)
+  expect_identical(class(out), class(m))
+  expect_equal(sum(attr(out, "gps_time_repairs")$repaired), 3L)
+  expect_equal(sf::st_crs(out)$epsg, 4326L)
+
+  # a tibble / data.table is still normalised to a plain data.frame
+  t2 <- d
+  class(t2) <- c("tbl_df", "tbl", "data.frame")
+  expect_equal(class(suppressWarnings(
+    fix_gps_time_order(t2, verbose = FALSE))), "data.frame")
+})
+
+test_that("an object claiming to be sf without geometry is handled, not fatal", {
+  # sf's own $<- method errors on such an object; it must be treated as a
+  # plain data frame instead of being allowed to crash the repair.
+  d <- .mk_gps(c(34, 41, 40, 43, 42, 45, 44, 47), 30.93282 + (0:7) * 1e-5)
+  m <- d
+  class(m) <- c("move2", "sf", "data.frame")
+  out <- suppressWarnings(fix_gps_time_order(m, verbose = FALSE))
+  expect_equal(sum(attr(out, "gps_time_repairs")$repaired), 3L)
+})
+
+test_that("fix_gps_time_order warns when it has no coordinates to verify with", {
+  d <- .mk_gps(c(34, 41, 40, 43, 42, 45, 44, 47), 30.93282)
+  d$Latitude <- NULL
+  d$Longitude <- NULL
+  expect_warning(fix_gps_time_order(d, verbose = FALSE), "no coordinates found")
+})
+
+test_that("the parsimony guard protects a burst even without coordinates", {
+  d <- .mk_gps(c(14.945, 10, 11, 12, 13, 14, 15, 16), 30.93282)
+  d$Latitude <- NULL
+  d$Longitude <- NULL
+  out <- suppressWarnings(fix_gps_time_order(d, verbose = FALSE))
+  rep <- attr(out, "gps_time_repairs")
+  expect_false(any(rep$repaired))
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)
+})

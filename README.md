@@ -347,6 +347,8 @@ Flagged rows appear in the report with `repaired = FALSE` and a reason, and thei
 
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence's own sampling rate when the run ends before recovering.
 
+**Spatial objects.** `sf` and `move2` objects are returned with their class, geometry and track metadata intact, and their coordinates are read from the geometry column when `Latitude`/`Longitude` are absent. If no coordinates can be found at all the function warns, because the position check that separates a clock fault from a spurious fix cannot run without them.
+
 **What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
 
 | Parameter | Description | Default |
@@ -541,6 +543,8 @@ Setting `forward_only = FALSE` additionally allows a transposition to be repaire
 Flagged rows appear in the report with `repaired = FALSE` and a reason, and their timestamps are left exactly as recorded for you to inspect or drop.
 
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence own sampling rate when the run ends before recovering.
+
+**Spatial objects.** `sf` and `move2` objects are returned with their class, geometry and track metadata intact, and their coordinates are read from the geometry column when `Latitude`/`Longitude` are absent. If no coordinates can be found at all the function warns, because the position check that separates a clock fault from a spurious fix cannot run without them.
 
 **What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
 

@@ -89,7 +89,21 @@ fix_gps_time_order <- function(df,
 
   # ── guards ──────────────────────────────────────────────────────────────────
   if (!inherits(df, "data.frame")) stop("`df` must be a data frame.")
-  if (!identical(class(df), "data.frame")) df <- as.data.frame(df)
+  # sf / move2 objects carry their geometry and track metadata in attributes.
+  # Converting them to a plain data.frame would silently discard that, so only
+  # tibbles and data.tables are normalised here; spatial objects are kept as
+  # they are and returned with their class intact.
+  #
+  # The class alone is not enough: an object can claim to be sf while carrying
+  # no geometry column, and sf's own methods then fail on it. Such an object is
+  # treated as an ordinary data frame.
+  is_sf <- inherits(df, "sf") &&
+           !is.null(attr(df, "sf_column")) &&
+           attr(df, "sf_column") %in% names(df)
+  orig_class <- class(df)
+  if (!is_sf && !identical(class(df), "data.frame")) {
+    df <- as.data.frame(df)
+  }
   if (nrow(df) == 0) stop("`df` has zero rows.")
   if (!"datatype" %in% names(df)) stop("Missing required column: datatype")
 
@@ -110,6 +124,29 @@ fix_gps_time_order <- function(df,
 
   lat <- if (has_xy) .gl_as_num(df[[lat_col]]) else rep(NA_real_, n)
   lon <- if (has_xy) .gl_as_num(df[[lon_col]]) else rep(NA_real_, n)
+
+  # An sf / move2 object keeps its coordinates in the geometry column rather
+  # than in Latitude / Longitude. Without this the position check below would
+  # be silently skipped, and a spurious fix could be mistaken for a clock fault.
+  if (!has_xy && is_sf && requireNamespace("sf", quietly = TRUE)) {
+    xy <- tryCatch(sf::st_coordinates(df), error = function(e) NULL)
+    if (is.matrix(xy) && nrow(xy) == n &&
+        all(c("X", "Y") %in% colnames(xy))) {
+      lon_try <- suppressWarnings(as.numeric(xy[, "X"]))
+      lat_try <- suppressWarnings(as.numeric(xy[, "Y"]))
+      if (any(is.finite(lon_try) & is.finite(lat_try))) {
+        lon    <- lon_try
+        lat    <- lat_try
+        has_xy <- TRUE
+      }
+    }
+  }
+
+  if (!has_xy)
+    warning("fix_gps_time_order: no coordinates found (Latitude/Longitude or ",
+            "an sf geometry column), so repairs cannot be verified against ",
+            "the track. Inversions will be reported but only the most ",
+            "conservative repairs applied.", call. = FALSE)
 
   # ── locate contiguous GPS runs belonging to one individual ─────────────────
   gps_idx <- which(is_gps)
@@ -370,6 +407,10 @@ fix_gps_time_order <- function(df,
     if ("milliseconds" %in% names(df))
       df$milliseconds[chg] <- round((as.numeric(new) %% 1) * 1000)
   }
+
+  # sf's replacement methods can reorder the class vector (move2/sf -> sf/move2),
+  # which would change method dispatch on a move2 object. Restore it exactly.
+  if (is_sf && !identical(class(df), orig_class)) class(df) <- orig_class
 
   attr(df, "gps_time_repairs") <- report
 
