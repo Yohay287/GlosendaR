@@ -537,6 +537,8 @@ test_that("fix_gps_time_order repairs a clock fault with continuous positions", 
 })
 
 test_that("fix_gps_time_order refuses to repair when the position also jumps", {
+  # The fix whose time is out of order is also 344 km away, so this is not a
+  # clock fault. It must be reported and the timestamps left alone.
   d <- .mk_gps(c(0, 1, 2, 1, 4, 5),
                c(30.7, 30.7001, 30.7002, 33.8, 30.7004, 30.7005))
   out <- fix_gps_time_order(d, verbose = FALSE)
@@ -544,7 +546,7 @@ test_that("fix_gps_time_order refuses to repair when the position also jumps", {
 
   expect_equal(nrow(rep), 1L)
   expect_false(rep$repaired)
-  expect_true(grepl("position jumps", rep$reason))
+  expect_true(grepl("outlier|position jumps", rep$reason))
   expect_equal(out$UTC_timestamp, d$UTC_timestamp)   # untouched
 })
 
@@ -658,4 +660,96 @@ test_that("repair improves the coordinate/time alignment, never degrades it", {
   # after the repair, time order and row order agree
   expect_false(is.unsorted(
     as.numeric(as.POSIXct(out$UTC_timestamp, tz = "UTC")), strictly = TRUE))
+})
+
+test_that("a spurious fix leading a clean burst is flagged, not used as an anchor", {
+  # Real case: one fix 21 km away at 5831 m altitude sits in front of a clean
+  # 1 Hz burst. Anchoring on it would drag the sound timestamps forward and
+  # destroy the burst, so the outlier must be flagged instead.
+  base <- as.POSIXct("2024-03-12 13:07:00", tz = "UTC")
+  ts   <- base + c(14.945, 10, 11, 12, 13, 14, 15, 16)
+  d <- data.frame(
+    tag_name = "K", datatype = "GPS", UTC_datetime = ts,
+    UTC_timestamp = format(ts, "%Y-%m-%d %H:%M:%OS3", tz = "UTC"),
+    Latitude  = c(30.90232, rep(30.93282, 7)),
+    Longitude = c(34.76187, rep(34.53975, 7)),
+    milliseconds = c(945, rep(0, 7)), stringsAsFactors = FALSE)
+
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_equal(nrow(rep), 1L)
+  expect_equal(rep$row, 1L)              # the outlier, not the burst
+  expect_equal(rep$method, "flagged")
+  expect_false(rep$repaired)
+  expect_true(grepl("outlier", rep$reason))
+
+  # the burst must come through completely untouched
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)
+})
+
+test_that("clock faults are still repaired when every fix is close together", {
+  # Same shape of inversion, but no position outlier — these are real clock
+  # faults and must be repaired rather than flagged.
+  base <- as.POSIXct("2023-12-17 13:47:00", tz = "UTC")
+  ts   <- base + c(34, 41, 40, 43, 42, 45, 44, 47)
+  d <- data.frame(
+    tag_name = "B", datatype = "GPS", UTC_datetime = ts,
+    UTC_timestamp = format(ts, "%Y-%m-%d %H:%M:%S", tz = "UTC"),
+    Latitude = 30.772 + (0:7) * 1e-5, Longitude = 34.465,
+    milliseconds = 0, stringsAsFactors = FALSE)
+
+  rep <- attr(fix_gps_time_order(d, verbose = FALSE), "gps_time_repairs")
+  expect_equal(nrow(rep), 3L)
+  expect_true(all(rep$repaired))
+  expect_true(all(rep$shift_sec == 2))
+})
+
+test_that("a rejected case does not become the anchor for the rows after it", {
+  base <- as.POSIXct("2024-03-12 13:07:00", tz = "UTC")
+  ts   <- base + c(14.945, 10, 11, 12, 13)
+  d <- data.frame(
+    tag_name = "K", datatype = "GPS", UTC_datetime = ts,
+    UTC_timestamp = format(ts, "%Y-%m-%d %H:%M:%OS3", tz = "UTC"),
+    Latitude  = c(30.90232, rep(30.93282, 4)),
+    Longitude = c(34.76187, rep(34.53975, 4)),
+    milliseconds = c(945, rep(0, 4)), stringsAsFactors = FALSE)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  # nothing after the outlier may be rewritten
+  expect_equal(out$UTC_timestamp[2:5], d$UTC_timestamp[2:5])
+})
+
+test_that("a spurious fix is flagged, never used to drag good rows forward", {
+  # A bad fix 21 km away sits in front of a clean 1 Hz burst. Anchoring on it
+  # would push five good timestamps forward into a fraction of a second.
+  d <- .mk_gps(c(14.945, 10, 11, 12, 13, 14, 15, 16),
+               c(30.90232, rep(30.93282, 7)),
+               c(34.76187, rep(34.53975, 7)))
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_equal(nrow(rep), 1L)
+  expect_false(rep$repaired)
+  expect_equal(rep$row, 1L)                 # the outlier itself is flagged
+  expect_true(grepl("outlier", rep$reason))
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)   # nothing rewritten
+})
+
+test_that("parsimony stops one suspect row rewriting many good ones", {
+  # Same shape, but the suspect row is at the same position, so coordinates
+  # give no clue. Blaming five evenly spaced fixes to accommodate one row is
+  # the less parsimonious reading and must be refused.
+  d <- .mk_gps(c(14.945, 10, 11, 12, 13, 14, 15, 16), 30.93282, 34.53975)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  rep <- attr(out, "gps_time_repairs")
+
+  expect_false(any(rep$repaired))
+  expect_true(grepl("consecutive rows", rep$reason[1]))
+  expect_equal(out$UTC_timestamp, d$UTC_timestamp)
+})
+
+test_that("max_consecutive still allows short genuine runs to be repaired", {
+  d <- .mk_gps(c(8, 9, 10, 9, 12), 30.93282, 34.53975)
+  out <- fix_gps_time_order(d, verbose = FALSE)
+  expect_true(all(attr(out, "gps_time_repairs")$repaired))
 })

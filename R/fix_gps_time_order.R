@@ -38,6 +38,12 @@
 #'   increment, so the recorded time is always behind the true one and a
 #'   correction can only be an advance. Leaving this \code{TRUE} (the default)
 #'   guarantees no fix is ever moved to an earlier time. Default: \code{TRUE}.
+#' @param max_consecutive Integer. Largest number of consecutive rows that may
+#'   be rewritten to accommodate one earlier row. When more than this would be
+#'   needed, the earlier row is judged the faulty one instead and is flagged
+#'   rather than repaired — rewriting a run of evenly spaced fixes to fit behind
+#'   a single suspect timestamp would compress a real sequence into a fraction
+#'   of a second. Default: \code{2}.
 #' @param update_cols Logical. Write the repaired times back into every time
 #'   column present (\code{UTC_timestamp}, \code{UTC_datetime}, \code{UTC_date},
 #'   \code{UTC_time}, \code{milliseconds}). When \code{FALSE} the data frame is
@@ -77,6 +83,7 @@ fix_gps_time_order <- function(df,
                                max_jump_m    = 1000,
                                max_gap_sec   = 60,
                                forward_only  = TRUE,
+                               max_consecutive = 2,
                                update_cols   = TRUE,
                                verbose       = TRUE) {
 
@@ -130,6 +137,69 @@ fix_gps_time_order <- function(df,
     j <- 2L
     while (j <= length(t)) {
       if (is.na(t[j]) || is.na(t[j - 1L]) || t[j] > t[j - 1L]) { j <- j + 1L; next }
+
+      # ── 0. Which side of the step is the anomaly? ──────────────────────────
+      # The repair below assumes the rows BEFORE the step are sound and the
+      # ones after are corrupt. That is wrong when a spurious fix sits in
+      # front of an otherwise clean sequence: anchoring on it would drag good
+      # timestamps forward and destroy the sequence.
+      #
+      # The tell is position, not time: a spurious fix sits far away from the
+      # sequence it precedes, while a mere clock fault leaves the track
+      # continuous. So t[j-1] is treated as the outlier only when it is both
+      # remote from what follows AND the following rows already run cleanly.
+      tail_ok <- FALSE
+      if (has_xy) {
+        prow <- ridx[j - 1L]
+        nrw  <- ridx[j]
+        if (!is.na(lat[prow]) && !is.na(lat[nrw])) {
+          far <- .gl_haversine_m(lat[prow], lon[prow], lat[nrw], lon[nrw]) > max_jump_m
+          if (far) {
+            look <- min(j + 4L, length(t))
+            if (look > j) {
+              seg <- t[j:look]
+              tail_ok <- !anyNA(seg) && !is.unsorted(seg, strictly = TRUE) &&
+                         max(diff(seg)) <= max_gap_sec
+            }
+          }
+        }
+      }
+
+      # Parsimony: count how many rows each reading of the fault would blame.
+      # Repairing the rows after t[j-1] blames all of them; treating t[j-1] as
+      # a single bad reading blames one. When several evenly spaced fixes would
+      # have to be rewritten to accommodate one suspect row, the suspect row is
+      # the likelier fault — and rewriting the others would compress a real
+      # sequence into a fraction of a second. Position may be uninformative
+      # here (a stationary bird), so this check does not depend on coordinates.
+      k_look <- j + 1L
+      while (k_look <= length(t) &&
+             (is.na(t[k_look]) || t[k_look] <= t[j - 1L])) k_look <- k_look + 1L
+      n_blamed <- k_look - j
+      if (n_blamed > max_consecutive) tail_ok <- TRUE
+      if (tail_ok) {
+        row <- ridx[j - 1L]
+        dn  <- .gl_haversine_m(lat[row], lon[row], lat[ridx[j]], lon[ridx[j]])
+        rep_rows <- c(rep_rows, row)
+        rep_old  <- c(rep_old,  t[j - 1L])
+        rep_new  <- c(rep_new,  NA_real_)
+        rep_dp   <- c(rep_dp,   NA_real_)
+        rep_dn   <- c(rep_dn,   dn)
+        rep_spd  <- c(rep_spd,  NA_real_)
+        rep_ok   <- c(rep_ok,   FALSE)
+        rep_why  <- c(rep_why,
+          if (is.finite(dn) && dn > max_jump_m)
+            sprintf(paste("this row is %.0f m from the sequence that follows",
+                          "— it is the outlier, not a clock fault;",
+                          "inspect or drop it"), dn)
+          else
+            sprintf(paste("repairing this inversion would rewrite %d consecutive",
+                          "rows — this row is the likelier fault; inspect it"),
+                    n_blamed))
+        rep_how  <- c(rep_how,  "flagged")
+        j <- j + 1L
+        next
+      }
 
       # ── 1. Can the recorded values simply be put back in order? ─────────────
       # A common fault is a transposition: the tag wrote two neighbouring
@@ -235,7 +305,13 @@ fix_gps_time_order <- function(df,
         rep_why  <- c(rep_why,  why)
         rep_how  <- c(rep_how,  method)
 
-        if (ok) { t[p] <- nt; ts_fixed[row] <- nt }
+        if (ok) {
+          t[p] <- nt; ts_fixed[row] <- nt
+        } else {
+          # Do not keep repairing against a row that failed verification:
+          # subsequent rows would be measured from an unreliable anchor.
+          break
+        }
       }
       # Continue after the window just handled; always advance at least one row
       j <- max(win[length(win)] + 1L, j + 1L)

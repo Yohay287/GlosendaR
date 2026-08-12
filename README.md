@@ -336,6 +336,15 @@ repaired   34, 41, 42, 43, 44, 45, 46, 47      +2 s on three rows
 
 Setting `forward_only = FALSE` additionally allows a transposition to be repaired by swapping two recorded timestamps back into order (shifts of ±1 s). That is off by default because it moves a fix backwards in time.
 
+**Which side is wrong?** A backward step means one of the two rows is faulty, and position decides which. If the *earlier* row sits more than `max_jump_m` away from the clean sequence that follows, it is a spurious fix rather than a clock fault — it is reported with `method = "flagged"` and nothing is rewritten, because anchoring on it would drag sound timestamps forward and destroy the burst. Only when the track is continuous is the later row treated as the corrupt one and repaired.
+
+**Not every inversion is a clock fault.** Sometimes the row *before* the inversion is a spurious fix — a bad position that happens to carry a late timestamp. Anchoring on it would drag the good rows that follow forward and destroy a real sequence, so two guards prevent that:
+
+- if that row sits more than `max_jump_m` from the sequence that follows, it is the outlier and is flagged, not repaired;
+- if accommodating it would require rewriting more than `max_consecutive` rows, it is the likelier fault by parsimony and is flagged instead. This guard does not use coordinates, so it also protects a stationary bird where position gives no clue.
+
+Flagged rows appear in the report with `repaired = FALSE` and a reason, and their timestamps are left exactly as recorded for you to inspect or drop.
+
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence's own sampling rate when the run ends before recovering.
 
 **What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
@@ -345,6 +354,7 @@ Setting `forward_only = FALSE` additionally allows a transposition to be repaire
 | `max_jump_m` | Max distance (m) to adjacent fixes for a repair to be accepted | `1000` |
 | `max_gap_sec` | Only inspect inversions inside a fix sequence this tight | `60` |
 | `forward_only` | Never move a timestamp to an earlier time | `TRUE` |
+| `max_consecutive` | Max rows rewritten to accommodate one earlier row | `2` |
 | `update_cols` | Write repaired times back into all time columns | `TRUE` |
 
 Run it before `detect_gps_burst()` so that burst detection sees a clean, monotone time series.
@@ -521,6 +531,15 @@ repaired   34, 41, 42, 43, 44, 45, 46, 47      +2 s on three rows
 
 Setting `forward_only = FALSE` additionally allows a transposition to be repaired by swapping two recorded timestamps back into order (shifts of ±1 s). That is off by default because it moves a fix backwards in time.
 
+**Which side is wrong?** A backward step means one of the two rows is faulty, and position decides which. If the *earlier* row sits more than `max_jump_m` away from the clean sequence that follows, it is a spurious fix rather than a clock fault — it is reported with `method = "flagged"` and nothing is rewritten, because anchoring on it would drag sound timestamps forward and destroy the burst. Only when the track is continuous is the later row treated as the corrupt one and repaired.
+
+**Not every inversion is a clock fault.** Sometimes the row *before* the inversion is a spurious fix — a bad position that happens to carry a late timestamp. Anchoring on it would drag the good rows that follow forward and destroy a real sequence, so two guards prevent that:
+
+- if that row sits more than `max_jump_m` from the sequence that follows, it is the outlier and is flagged, not repaired;
+- if accommodating it would require rewriting more than `max_consecutive` rows, it is the likelier fault by parsimony and is flagged instead. This guard does not use coordinates, so it also protects a stationary bird where position gives no clue.
+
+Flagged rows appear in the report with `repaired = FALSE` and a reason, and their timestamps are left exactly as recorded for you to inspect or drop.
+
 **How it decides.** Every backward step between two consecutive GPS rows of the same individual is a candidate. Before rewriting anything the function checks the coordinates: the fix must stay within `max_jump_m` (default 1000 m) of its temporally adjacent neighbours. If the position jumped too, the problem is not merely a clock fault — the case is reported but left untouched for you to inspect. The replacement time is interpolated from the surrounding sound fixes, or continued at the sequence own sampling rate when the run ends before recovering.
 
 **What it never does:** reorder rows, alter coordinates, or touch ACC rows. A GPS timestamp falling slightly after the following `ACC_START` is the normal acquisition lag, not a fault, and is ignored.
@@ -530,6 +549,7 @@ Setting `forward_only = FALSE` additionally allows a transposition to be repaire
 | `max_jump_m` | Max distance (m) to adjacent fixes for a repair to be accepted | `1000` |
 | `max_gap_sec` | Only inspect inversions inside a fix sequence this tight | `60` |
 | `forward_only` | Never move a timestamp to an earlier time | `TRUE` |
+| `max_consecutive` | Max rows rewritten to accommodate one earlier row | `2` |
 | `update_cols` | Write repaired times back into all time columns | `TRUE` |
 
 Run it before `detect_gps_burst()` so that burst detection sees a clean, monotone time series.
