@@ -424,7 +424,9 @@ MIT
 ### `analyze_acc()`
 
 Processes ACC bursts in the data frame returned by `glosendas_download()` and attaches per-burst summary statistics to the corresponding GPS fix.
+
 As described by Vaadia et al. (2025):
+
 Vaadia, G., Acácio, M., Agassi, T., Anglister, N., Miller, Y., Hatzofe, O., Mateo-Tomás, P., Rodríguez-Pérez, J., Fernández-García, M., Olea, P. P., Otero, I., Pinter-Wollman, N., Shahar, M., & Spiegel, O. (2025). Using accelerometer-based behavioural classification to enhance scavenger conservation. Journal of Applied Ecology, 62, 2987–3004. https://doi.org/10.1111/1365-2664.70180
 
 ```r
